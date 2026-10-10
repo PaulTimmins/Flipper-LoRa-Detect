@@ -1,0 +1,8 @@
+# Raw captures can contain node names, keys and GPS positions from adverts.
+# Keep them out of the public repo unless deliberately scrubbed.
+captures/
+__pycache__/
+*.pyc
+dist/
+.vscode/
+.DS_Store

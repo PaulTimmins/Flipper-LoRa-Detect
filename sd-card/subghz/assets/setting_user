@@ -1,0 +1,31 @@
+Filetype: Flipper SubGhz Setting File
+Version: 1
+
+# Keep the stock frequency list and add the MeshCore / Meshtastic US defaults.
+Add_standard_frequencies: true
+Default_frequency: 910525000
+
+# MeshCore US/Canada recommended (62.5 kHz, SF7, CR4/5)
+Frequency: 910525000
+# Meshtastic US default slots (LongFast, MediumFast)
+Frequency: 906875000
+Frequency: 913125000
+
+# LoRa62: 2-FSK async, based on the stock FM476 preset, with:
+#   MDMCFG4 0xAB, MDMCFG3 0xF8 -> RX filter ~135 kHz (62.5 kHz LoRa + crystal error
+#                   headroom), data rate 99.97 kBaud. The CC1101 clocks its async output
+#                   at 8x the data rate, so this gives ~1.25 us edge timing instead of
+#                   ~26 us at the stock 4.8 kBaud (which limited decoding).
+#   DEVIATN 0x42 -> ~31.7 kHz, matches the +/-31.25 kHz chirp sweep
+#   FOCCFG  0x14 -> frequency offset compensation OFF (stock 0x16 tracks +/-BW/4,
+#                   which would chase the chirp)
+Custom_preset_name: LoRa62
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 F8 10 AB 15 42 18 18 19 14 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+# LoRa250: same as LoRa62 but for 250 kHz LoRa (Meshtastic LongFast/MediumFast etc.):
+#   MDMCFG4 0x5B, MDMCFG3 0xF8 -> RX filter ~325 kHz, data rate 99.97 kBaud
+#   DEVIATN 0x62 -> ~127 kHz, matches the +/-125 kHz chirp sweep
+Custom_preset_name: LoRa250
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 F8 10 5B 15 62 18 18 19 14 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
