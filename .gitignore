@@ -6,3 +6,13 @@ __pycache__/
 dist/
 .vscode/
 .DS_Store
+
+# Local host-test executables
+/tests/host_detect
+/tests/test_detector
+*.dSYM/
+
+/tests/host_payload
+/tests/test_payload
+
+/tests/test_report

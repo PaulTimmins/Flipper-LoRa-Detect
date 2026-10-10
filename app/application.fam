@@ -1,0 +1,13 @@
+App(
+    appid="lora_detect",
+    name="LoRa Detect",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="lora_detect_app",
+    requires=["gui"],
+    stack_size=2048,
+    fap_category="Sub-GHz",
+    fap_icon="lora_icon.png",
+    fap_version="0.4",
+    fap_description="Receive-only LoRa preamble and mesh activity detector",
+    fap_author="flipper-lora-detect",
+)

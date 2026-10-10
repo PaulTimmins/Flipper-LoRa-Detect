@@ -1,4 +1,4 @@
-# flipper-lora-detect
+# Flipper-LoRa-Detect
 
 Detect, identify, and in many cases fully decode **LoRa mesh traffic (MeshCore and
 Meshtastic) with a stock Flipper Zero**, even though its CC1101 radio can't demodulate LoRa.
@@ -60,6 +60,82 @@ Both use 2-FSK async with frequency-offset compensation **off** (the stock prese
 Then: **Sub-GHz → Read RAW → Config**, choose the frequency and preset, set the RSSI
 threshold to its lowest setting, record, and make a node transmit (flood advert, channel
 message, traceroute…).
+
+## Flipper app
+
+The receive-only app in `app/` identifies LoRa preambles and sync words on the internal
+CC1101. It displays a likely network/preset, SF, bandwidth, RSSI, detection count and
+age. Network labels are guesses based on modulation and sync, not authenticated identities.
+The on-device decoder supports **MeshCore US (SF7 / 62.5 kHz)** packet types and advert
+names. Meshtastic and other PHYs retain detection/RSSI; their payload decoding remains
+in the Python tools.
+
+Build with `ufbt` using the official 1.4.3 SDK:
+
+```bash
+make -C tests check
+cd app
+ufbt
+ufbt launch
+```
+
+The binary is `app/dist/lora_detect.fap`. You can also copy it to
+`/ext/apps/Sub-GHz/lora_detect.fap` with qFlipper. Close/disconnect qFlipper before
+using `ufbt launch`, since only one program can hold the USB serial connection.
+The app includes its own presets; installing `setting_user` is not required.
+
+* **Left / Right:** choose a profile and enter Watch mode.
+* **OK:** toggle Survey mode (10 seconds per profile).
+* **Up / Down:** browse the eight most recently heard signal types.
+* **Hold Up:** switch between traffic details and the original RF view.
+* **Hold OK:** toggle text and CSV logging; `REC` means enabled, `ERR` means a write failed.
+* **Back:** stop reception and exit.
+
+The traffic view shows an advert name when recoverable, a traffic type such as advert,
+ACK, channel message or path, and the received RSSI. It does not decrypt message text.
+`CRC OK` means the packet checksum passed; advert signatures are **not** checked on the
+Flipper. `UNVERIFIED` and a `?` mean damaged/tentative data: names and types may be wrong.
+Close repeats with similar identity and timestamp bytes are soft-combined to improve
+advert readability, but remain unverified. Wait for further copies if the name is missing.
+The full recovered name (up to 32 bytes) is retained in the log; the small screen shows
+its first 22 characters. Non-ASCII bytes display as `?`.
+
+The decoder uses a fixed ~26 KB working area plus a 32 KB snippet buffer, and falls
+back to detection-only if there is insufficient free heap. After a MeshCore detection,
+it captures up to 2.5 seconds (or 8,192 pulse words), then decodes on a background thread that time-shares with the radio worker, trying five small timing offsets. Expect several seconds per packet before initial details appear; the full timing search
+can take around 1–2 minutes with live reception running and may improve tentative candidates. The radio
+keeps detecting while a snippet is processed; packets arriving during decoding are
+skipped for payload capture, counted on screen, and still logged when recording. They
+do not replace the captured packets in history. The footer shows progress and elapsed
+seconds, then `Done`; an unsuccessful attempt ends with `No payload recovered`. A retune or lost samples abort an unfinished capture. Previously captured snippets
+can finish decoding after a retune, with their original frequency and RSSI. The Python decoder remains more capable at recovering damaged signals.
+
+Logging defaults off. Records append to `/ext/apps_data/lora_detect/detections.csv`;
+timestamps are device uptime in milliseconds, sync is decimal (`-1` means unreadable),
+and RSSI is sampled when detection completes. With logging enabled, payload results
+also append to `/ext/apps_data/lora_detect/traffic.csv`, including type, name, RSSI,
+confidence and combined-copy count. A green LED blink indicates a detection.
+
+For the stock iPhone Flipper app, decoded results also append to
+`/ext/apps_data/lora_detect/LoRa Logs.txt`. It shows detection date/time (from the
+Flipper clock), traffic type, recovered name, RSSI, frequency and verification status.
+Hold OK to enable `REC`; allow the background decode to finish before viewing results.
+On iPhone, connect by Bluetooth and open **Options → File Manager → ext (SD Card) →
+apps_data → lora_detect → LoRa Logs.txt**. Reopen the file to refresh; it does not
+update live. The file is created at startup with instructions even before any results
+are recorded. Entries are oldest first; CSV logging remains available.
+
+The idle screen shows callback rate, sampled stream headroom and lost pulses; `!loss`
+on the detection screen flags sample loss. On overflow the worker restarts reception
+and resets the detector so gaps cannot be mistaken for a continuous preamble.
+
+The supplied MeshCore and LongFast captures pass desktop regression checks. Synthetic
+MeshCore adverts pass full waveform-to-name tests at CR4/5 through CR4/8; malformed
+frames and damaged packets are checked with address/undefined-behavior sanitizers.
+The old MeshCore capture's combined candidate name matches the offline signature-verified
+name, while correctly remaining unverified on-device. The build
+passes the official SDK import check, and USB upload/launch succeeded on the connected
+Flipper. Live packet reception and the computed 125/500 kHz presets still need field validation. See [design notes](docs/APP_DESIGN.md) for details.
 
 ## Tools
 
