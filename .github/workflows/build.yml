@@ -24,6 +24,7 @@ jobs:
         with:
           app-dir: app
           ufbt-version: '==0.2.6'
+          sdk-hw-target: f7
           sdk-url: https://update.flipperzero.one/builds/firmware/1.4.3/flipper-z-f7-sdk-1.4.3.zip
       - name: Package release files
         env:
