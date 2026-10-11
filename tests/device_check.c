@@ -20,6 +20,8 @@ int32_t lora_check_app(void* ctx) {
     a->notifications = furi_record_open(RECORD_NOTIFICATION);
     a->payload = malloc(sizeof(LoraPayload));
     a->capture.busy = true;
+    a->capture.decode_mode = a->model.decode_mode = 2;
+    a->capture.bandwidth = 62500;
     File* file = storage_file_alloc(a->storage);
     furi_check(storage_file_open(
         file, EXT_PATH("apps_data/lora_detect/check.bin"), FSAM_READ, FSOM_OPEN_EXISTING));

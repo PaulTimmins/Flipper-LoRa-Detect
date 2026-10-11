@@ -1,0 +1,4 @@
+App(appid="lora_tx_bench", name="LoRa TX Bench", apptype=FlipperAppType.EXTERNAL,
+    entry_point="lora_tx_bench_app", requires=["gui"], stack_size=2048,
+    fap_category="Sub-GHz", fap_version="0.1", fap_author="Paul Timmins / Codex",
+    fap_description="Experimental OOK sideband LoRa waveform bench")

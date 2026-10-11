@@ -1,0 +1,40 @@
+{
+  "sample_rate": 1000000,
+  "target_center": 910525000,
+  "carrier_requested": 910483750,
+  "bandwidth": 62500,
+  "spreading_factor": 7,
+  "lower_sideband_center": 910442500,
+  "payload_hex": "16001145cc4c90eea70f0e45acaf41c6d292eae5a0d521c01ba7aa14747d8067056850f1c9",
+  "hardware_validation": "See README.md result record",
+  "waveforms": [
+    {
+      "name": "tone",
+      "title": "Tone 41.25k",
+      "duration_us": 65536,
+      "edges": 5408,
+      "minimum_pulse_us": 2
+    },
+    {
+      "name": "preamble",
+      "title": "MC preamble",
+      "duration_us": 65537,
+      "edges": 5408,
+      "minimum_pulse_us": 2
+    },
+    {
+      "name": "packet5",
+      "title": "MC packet CR5",
+      "duration_us": 213504,
+      "edges": 17639,
+      "minimum_pulse_us": 6
+    },
+    {
+      "name": "packet8",
+      "title": "MC packet CR8",
+      "duration_us": 287232,
+      "edges": 23722,
+      "minimum_pulse_us": 6
+    }
+  ]
+}

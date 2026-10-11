@@ -1,13 +1,21 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../app/payload.h"
+#include "../app/protocol.h"
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 static LoraPayload payload;
 static LoraPayloadResult best[32];
-static unsigned result_count;
+static unsigned result_count, edge_starts, correlation_starts;
 static void decoded(const LoraPayloadResult* r, void* ctx) {
     (void)ctx;
+    if(r->payload_complete)
+        assert(r->decoded_bytes == r->length);
+    else
+        assert(r->packet_type == -1);
+    if(r->status == LoraPayloadCrcOk)
+        assert(r->payload_complete && r->crc_present && r->received_crc == r->computed_crc);
     unsigned i = 0;
     for(; i < result_count; ++i)
         if(best[i].detection_time == r->detection_time) break;
@@ -20,23 +28,29 @@ static void decoded(const LoraPayloadResult* r, void* ctx) {
 }
 static void detected(const LoraDetection* d, void* ctx) {
     (void)ctx;
-    lora_payload_start(&payload, d);
+    if(lora_payload_start(&payload, d)) {
+        if(payload.edge_refine)
+            ++edge_starts;
+        else
+            ++correlation_starts;
+    }
 }
 int main(int argc, char** argv) {
-    if(argc != 2) return 2;
+    if(argc < 2 || argc > 3) return 2;
+    unsigned bw = argc == 3 ? (unsigned)atoi(argv[2]) : 62500;
     FILE* f = fopen(argv[1], "r");
     if(!f) return 2;
     LoraDetector d;
     lora_payload_init(&payload, decoded, NULL);
-    lora_detector_init(&d, 62500, detected, NULL);
+    lora_detector_init(&d, bw, detected, NULL);
     char* line = NULL;
     size_t size = 0;
     static const float phases[] = {0, -8, -4, 4, 8};
     for(unsigned phase = 0; phase < 5; ++phase) {
         rewind(f);
         lora_payload_init(&payload, decoded, NULL);
-        payload.phase_bias = phases[phase];
-        lora_detector_init(&d, 62500, detected, NULL);
+        payload.phase_bias = phases[phase] * 62500.0f / bw;
+        lora_detector_init(&d, bw, detected, NULL);
         while(getline(&line, &size, f) >= 0) {
             if(strncmp(line, "RAW_Data:", 9)) continue;
             char* p = line + 9;
@@ -52,7 +66,8 @@ int main(int argc, char** argv) {
         }
     }
     for(unsigned i = 0; i < result_count; ++i) {
-        const LoraPayloadResult* r = &best[i];
+        LoraPayloadResult* r = &best[i];
+        if(r->meshtastic && r->payload_complete) lora_mt_describe(r, true);
         printf(
             "payload t=%llu status=%d length=%u cr=%u type=%d name=%s quality=%.2f\n",
             (unsigned long long)r->detection_time,
@@ -63,6 +78,7 @@ int main(int argc, char** argv) {
             r->name,
             (double)r->quality);
     }
+    printf("timing edge=%u correlation=%u\n", edge_starts, correlation_starts);
     free(line);
     fclose(f);
     return 0;

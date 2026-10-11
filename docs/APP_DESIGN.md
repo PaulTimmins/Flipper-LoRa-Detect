@@ -1,6 +1,6 @@
 # On-device app: design notes
 
-A receive-only Flipper Zero app that answers one question: **"Is there MeshCore or
+A Flipper Zero activity detector with experimental test transmission that answers: **"Is there MeshCore or
 Meshtastic activity nearby, and which kind?"** It detects LoRa preambles, reads the sync
 word, and names the likely network and preset. Version 0.2 adds bounded MeshCore US payload decoding; the Python
 tools in `tools/` retain the more capable offline recovery algorithms.
@@ -205,9 +205,12 @@ the stream buffer.
 
 ## Out of scope
 
-* **Transmitting.** The CC1101 can't generate LoRa chirps (it only has discrete FSK
-  tones), so it can't send anything a LoRa node would decode, prepared ahead of time or
-  not. An external SX126x module would be needed.
+* **Native LoRa transmitting.** The CC1101 has no native LoRa
+  mode. A separate precomputed OOK-sideband experiment now lives in
+  `experiments/tx_bench`; digital-model checks pass, the user reported the exact test text in MeshCore
+  chat, and recorded SDR IQ independently yields the identical packet with valid
+  CRC and Public-channel MAC. Reliability is not yet measured. The earlier claim that precomputation could never help
+  was too strong. An external SX126x remains a native LoRa transmit option.
 * Full payload recovery, Meshtastic decryption and advert signature verification remain
   in the offline Python tools. Version 0.2 adds the limited MeshCore decoder below.
 
@@ -255,7 +258,7 @@ never become CRC-checked unless the original received packet independently passe
 No Ed25519 verification runs on-device, even for CRC-correct packets. The UI and
 `traffic.csv` explicitly distinguish CRC-checked from unverified candidates.
 
-Hold Up toggles the traffic/RF view. Hold OK enables both detection and traffic CSVs.
+Hold Up toggles the traffic/RF view. Hold OK opens Settings; Logging controls detection and traffic CSVs.
 Payloads are not logged in full. Captures stop after 2.5 seconds or when the fixed
 buffer fills; incomplete packets in a finished snippet remain undecoded. New detections
 continue while the decoder is busy, but do not start an additional snippet. Skipped
@@ -302,3 +305,132 @@ explicitly marked unavailable. CRC failures and unchecked signatures remain visi
 The phone viewer loads a snapshot; reopen the file to refresh. Existing logs are
 preserved and entries append oldest first. `tests/test_report.c` checks formatting,
 missing fields, confidence labels, control-character handling and buffer bounds.
+
+
+### Saved settings and Meshtastic support (v0.5)
+
+Hold OK opens the scrolling settings view. Logging and packet sound default On;
+decoding defaults Thorough to retain the best recovery of damaged MeshCore adverts.
+Quick performs one timing pass, Thorough five, and Off cancels pending decode work.
+MT LongFast chat and MC Public chat both default On and can be disabled separately. Settings use the firmware's
+versioned/checksummed saved-structure API; invalid data falls back to defaults.
+A short OK press wakes the display. Hold OK opens Settings and waits for release
+before accepting menu changes; logging is controlled in the menu. Packet sounds use
+the notification service and respect system volume/mute preferences.
+
+The existing 1024-sample correlation workspace is retained. Meshtastic SF7–SF11 uses
+sharp falling-edge timing to score every chip, including SF11's 2048 chip positions.
+Higher-SF header blocks also carry payload nibbles, which are now preserved. SF12
+and LDRO modes with symbol periods above 16 ms remain detection-only. Pulse-history
+lookups use binary search, and symbol-to-bit scoring shares work between bit positions.
+No FFT or Ed25519 verification runs on-device. Public-PSK AES-CTR is separate from
+radio decoding and is attempted only for CRC-checked packets with LongFast hash 0x08.
+
+MT metadata includes source/destination IDs. Optional decryption identifies node-info,
+routing, traceroute query/reply, neighbor, telemetry, position and text traffic;
+traceroute and neighbor reports include route/neighbor counts. Chat text is previewed on screen and retained in the phone log. Keys for private channels/PKI are not guessed. CRC does not authenticate
+the sender, and encrypted or malformed data is never labeled as a decoded application.
+
+MC Public group text uses AES-128 ECB with the standard Public PSK, channel hash 0x11, and a two-byte HMAC-SHA256 check over ciphertext. A matching MAC permits recovery even when the outer CRC fails; the original CRC status and ciphertext remain in the logs. Sender names are unverified. Settings version 4 adds the MC chat toggle and preserves older saved preferences during migration.
+
+MC control packets expose discovery query tags, repeater reply tags and public-key
+prefixes. Status/login/telemetry request bodies remain encrypted; the outer request
+or response label does not imply their subtype or a verified repeater identity.
+Protocol references:
+- https://github.com/meshcore-dev/MeshCore/blob/main/src/Packet.h
+- https://github.com/meshcore-dev/MeshCore/blob/main/examples/simple_repeater/MyMesh.cpp
+- https://github.com/meshtastic/firmware/blob/develop/src/mesh/RadioInterface.h
+- https://github.com/meshtastic/protobufs/blob/master/meshtastic/mesh.proto
+
+Host tests cover synthetic MT waveforms SF7–SF11 through CRC, AES and trace query,
+NIST AES-CTR vectors, decryption-off and CRC-failure gating, query/reply parsing,
+node names, malformed protobufs, and MC discovery. ASan/UBSan checks passed. The noisy
+private LongFast capture yields tentative headers but still fails CRC; this is not
+claimed as fully decoded. The original private MC regression still recovers its name.
+Device live-RX benchmarks retained three rows with no lost pulses: five passes took
+96.5 s before the final constant-size-loop adjustment; final Quick took 16.4 s but
+produced much poorer tentative names, hence the Thorough default. Live RF load affects
+elapsed time. The expanded GUI snapshot is stored in app memory rather than on the
+GUI service's small stack; device checks showed 1260 bytes minimum GUI stack remaining.
+
+Final device UI checks verified saved logging/sound/decode Off across a restart,
+Quick/Thorough switching, MT key On/Off, and ignoring Right-repeat events until the
+menu-opening key is released. Defaults were restored to On/On/Thorough/Off. Both
+worker threads remained active; final free heap was about 19.8 KB. The final GUI draw
+function uses a 140-byte local frame instead of the previous 1348-byte frame.
+
+### Decoder optimization measurement (2026-10-11)
+
+An on-device replay of the same 7,939 recorded pulse words (three damaged
+MeshCore packets, one timing phase, live RX paused) measured 5,906 ms at the
+firmware default `-Os` and 5,235 ms with only `payload.c` built at `-O2`.
+Both runs produced three results and zero CRC-valid packets. This is an 11%
+reduction in elapsed time for that workload, not a live-reception benchmark.
+The targeted compiler setting retains normal floating-point semantics.
+
+DWT cycle-counter instrumentation around template construction, payload feed,
+symbol processing, and the correlation loop gave these approximate baseline
+elapsed times (interrupt time is included): template 609 ms, sampling 1,084 ms,
+correlation 1,154 ms, other symbol processing 2,959 ms. The last category includes
+bit likelihood scoring, timing refinement, error correction, and completion.
+These measurements do not yet separate scoring from error correction. They
+suggest profiling that category before replacing the correlation algorithm.
+
+Packet notification now lasts 100 ms at half relative volume, still respecting
+system volume/mute. Turning Packet sound on in Settings plays the same chirp
+as a preview, without requiring a received packet.
+
+## Integrated test transmission (0.6)
+
+The main app now owns RX and experimental OOK-sideband TX in the same radio worker.
+Left is inactive. Right opens four actions: MC Public text, MC local repeater
+discovery, MT LongFast text, MT local NodeInfo query. Hold OK opens the saved menu
+with Channel, Mode (Watch/Scan), TX route (Local/Flood), and the previous options.
+Queries always use zero hops and never automatically repeat. They return to Watch
+on the appropriate profile with a 60-second listening window; decoded, CRC-valid
+responses matching the request ID increment the verified reply count; damaged MC
+replies with a matching tag increment a separate tentative count. MT NodeInfo replies
+are subject to firmware/role throttling and are not a repeater-specific census.
+
+`transmit_packet.c` builds packets; `mc_public.c` supplies the Public text builder.
+`transmit_wave.c` does integer chirp synthesis into two packed-bit buffers, borrowing
+capture.data plus the decoder workspace. TX pending cancels decoding; the radio
+worker waits until capture.busy clears after all decoder logging before touching
+either buffer. No new RX capture is possible because asynchronous RX is stopped.
+The DMA callback only reads packed bits. On every exit path the worker restores RX;
+a scoped US region exception restores the original region immediately after tuning,
+and the cached permission is re-evaluated after TX. Counter storage is committed
+before transmission so restarting does not repeat old packet IDs.
+
+MC uses the bench-proven 10–72.5 kHz upper-sideband sweep sampled at 1 us. LongFast
+uses a centered -125–125 kHz sweep sampled at 2 us. This halves the average pulse
+rate compared with the initially attempted 10–260 kHz sweep, which stretched on the
+stock DMA path. Both main-app message waveforms have now been captured with RTL-SDR
+and decoded with valid CRC; the MT packet also decrypts to the exact test text.
+A CRC-valid rebroadcast of the MT test message with hop limit reduced from 3 to 2
+was subsequently captured by the main app, confirming native-node acceptance.
+The ISR reader uses bit-run counting with the CPU's bit instructions rather than
+walking each sample. No floating-point work or cryptography occurs in the ISR.
+
+Protocol references: MeshCore `examples/simple_repeater/MyMesh.cpp`
+`onControlDataRecv`/`sendNodeDiscoverReq` and Meshtastic firmware
+`src/modules/NodeInfoModule.cpp`. MT broadcast queries use hop_limit=0 and stable
+app-specific node identity `Flipper test`/`FLIP`, without pretending to be a router.
+
+### Public message composer
+
+Each protocol has a third TX action, Write message. A temporary custom chat View /
+ViewDispatcher keyboard overlays the existing viewport while RX continues. The
+keyboard is freed before transmission, preserving the small heap budget. Done
+returns to a preview; a separate short OK sends one packet. Back from the preview
+reopens editing; Back from the keyboard cancels without consuming a sequence ID.
+Left is active inside the chat keyboard only. Explicit Space, Del, case, and
+123/abc page controls support normal text and punctuation. Long OK inverts case
+for one letter; held Back deletes. The draft tail scrolls with a character count.
+
+MC supports 34 typed characters, prefixed with `Flipper: `; MT supports 44 typed
+characters. Both fit the current 64-byte packet encoder. Builders reject empty or
+oversized messages rather than truncate them. The worker snapshots the draft and
+logs sent text if logging is enabled. Existing numbered tests and local queries
+remain separate actions. Host tests decrypt and coherently demodulate short and
+maximum-length composed messages for both protocols, including buffer boundaries.

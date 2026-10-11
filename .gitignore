@@ -16,3 +16,5 @@ dist/
 /tests/test_payload
 
 /tests/test_report
+
+/tests/test_protocol
