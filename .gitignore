@@ -18,3 +18,5 @@ dist/
 /tests/test_report
 
 /tests/test_protocol
+
+/tests/test_capture

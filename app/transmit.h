@@ -27,7 +27,8 @@ size_t lora_tx_packet(
     uint32_t sequence,
     uint32_t timestamp,
     uint32_t node,
-    bool flood);
+    bool flood,
+    uint8_t mc_hop_bytes);
 bool lora_tx_waveform(LoraTxWave*, const uint8_t*, size_t, bool meshtastic);
 /* A zero duration means end of waveform. Callable from the radio DMA refill. */
 uint32_t lora_tx_next(LoraTxWave*, bool* level);
@@ -42,4 +43,5 @@ size_t lora_tx_message(
     uint32_t sequence,
     uint32_t timestamp,
     uint32_t node,
-    bool flood);
+    bool flood,
+    uint8_t mc_hop_bytes);

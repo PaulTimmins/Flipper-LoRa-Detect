@@ -80,7 +80,7 @@ can demodulate.
    that work cannot delay an edge inside the transmit callback.
 5. **Return to listening.** RX and payload decoding share the radio and memory
    with TX. A send cancels pending decode work, waits for its buffers, borrows the
-   32 KB capture buffer plus decoder workspace, then restores reception before
+   20 KB packed capture buffer plus decoder workspace, then restores reception before
    logging the result. This is half-duplex; it cannot receive during a burst.
 
 The implementation is in [transmit_packet.c](app/transmit_packet.c),
@@ -171,7 +171,7 @@ names, plus discovery queries and repeater replies. Meshtastic SF7–SF11 at sup
 refinement. SF12 and low-data-rate-optimization modes (symbol periods over 16 ms)
 remain detection-only. No external radio is required. Experimental test transmission uses the internal CC1101 OOK sideband technique described below.
 
-**Hold OK** opens the saved menu: **Channel**, **Mode** (Watch/Scan), **TX route** (Local/Flood), logging, packet sound, **Off / Quick / Thorough**
+**Hold OK** opens the saved menu: **Channel**, **Mode** (Watch/Scan), **TX route** (Local/Flood), **MC hop bytes** (1/2/3; default 2), logging, packet sound, **Off / Quick / Thorough**
 decoding, and separate **MT LongFast chat** and **MC Public chat** decoding toggles. Up/Down selects a row; Right
 or OK changes it; Back returns to reception. Changes are saved immediately and persist across launches. Logging and sound change
 immediately; Quick/Thorough and chat decoding choices apply to the next capture. Off cancels
@@ -183,7 +183,11 @@ even with packet sound off. It uses the system brightness and normal backlight t
 
 Quick makes one timing pass; Thorough tries five. Off cancels pending work and keeps
 RF detection, RSSI, alerts and detection CSV logging active. The decoder workspace is
-reserved when memory permits so it can be re-enabled without restarting.
+reserved when memory permits so it can be re-enabled without restarting. If memory
+is temporarily tight at launch, allocation is retried once per second. Common
+pulses use one 16-bit word; long gaps use a three-word escape, retaining full
+microsecond precision. The allocation check reserves room for decoder and service
+threads and checks the largest contiguous heap block.
 
 The MT LongFast chat option tries only the public LongFast PSK/channel hash, and only after a
 packet passes CRC. It can label node info, routing, traceroute query/reply, neighbor,
@@ -235,6 +239,15 @@ in Watch mode on that profile. The Channel menu controls listening, not arbitrar
 TX route applies to test messages: MC Flood or empty-path Direct; MT three-hop or
 zero-hop broadcast. Queries are always local, regardless of TX route.
 
+**MC hop bytes** selects 1-, 2-, or 3-byte MeshCore path hashes, with **2 bytes**
+as the default, including when upgrading existing settings. It applies to both
+Public message actions and local repeater queries. This is the width of each
+repeater hash, not a hop limit. The initial path has zero hops and encodes the
+selected width in its top two bits: `0x00`, `0x40`, or `0x80`. Received paths use
+the width carried by the packet; Meshtastic is unaffected. Four-byte hashes are
+reserved by [MeshCore](https://github.com/meshcore-dev/MeshCore/blob/main/src/Packet.cpp)
+and are not offered. Channel, route, and hop width persist across launches.
+
 MC discovery requests full public keys from nearby repeaters, with a unique tag.
 MT sends a NodeInfo announcement named `Flipper test`/`FLIP` with `want_response` and
 hop limit zero. This discovers participating nodes, not exclusively repeaters.
@@ -274,9 +287,9 @@ advert readability, but remain unverified. Wait for further copies if the name i
 The full recovered name (up to 32 bytes) is retained in the log; the small screen shows
 its first 22 characters. Non-ASCII bytes display as `?`.
 
-The decoder uses a fixed ~27 KB working area plus a 32 KB snippet buffer, and falls
+The decoder uses a fixed ~27 KB working area plus a 20 KB packed snippet buffer, and falls
 back to detection-only if there is insufficient free heap. After a supported detection,
-it captures up to 2.5 seconds (or 8,192 pulse words), then decodes on a background thread that time-shares with the radio worker, trying one (Quick) or five (Thorough) small timing offsets. Expect several seconds per packet before initial details appear; the full timing search
+it captures up to 2.5 seconds (or 10,240 packed 16-bit words), then decodes on a background thread that time-shares with the radio worker, trying one (Quick) or five (Thorough) small timing offsets. Expect several seconds per packet before initial details appear; the full timing search
 can take around 1–2 minutes with live reception running and may improve tentative candidates. The radio
 keeps detecting while a snippet is processed; packets arriving during decoding are
 skipped for payload capture, counted on screen, and still logged when recording. They

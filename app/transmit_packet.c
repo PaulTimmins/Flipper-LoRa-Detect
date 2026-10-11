@@ -91,8 +91,13 @@ size_t lora_tx_packet(
     uint32_t sequence,
     uint32_t timestamp,
     uint32_t node,
-    bool flood) {
-    return make_packet(out, action, sequence, timestamp, node, flood, NULL);
+    bool flood,
+    uint8_t mc_hop_bytes) {
+    if(mc_hop_bytes < 1 || mc_hop_bytes > 3) return 0;
+    size_t length = make_packet(out, action, sequence, timestamp, node, flood, NULL);
+    if(length && (action == LoraTxMcText || action == LoraTxMcQuery))
+        out[1] = (mc_hop_bytes - 1) << 6; /* Width with zero initial hops. */
+    return length;
 }
 size_t lora_tx_message(
     uint8_t out[64],
@@ -101,8 +106,14 @@ size_t lora_tx_message(
     uint32_t sequence,
     uint32_t timestamp,
     uint32_t node,
-    bool flood) {
+    bool flood,
+    uint8_t mc_hop_bytes) {
+    if(mc_hop_bytes < 1 || mc_hop_bytes > 3) return 0;
     if(!text || !text[0]) return 0;
-    if(!mt) return lora_mc_message_packet(out, text, timestamp, flood);
+    if(!mt) {
+        size_t length = lora_mc_message_packet(out, text, timestamp, flood);
+        if(length) out[1] = (mc_hop_bytes - 1) << 6;
+        return length;
+    }
     return make_packet(out, LoraTxMtText, sequence, timestamp, node, flood, text);
 }

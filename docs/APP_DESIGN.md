@@ -241,7 +241,7 @@ decoding recovers explicit headers and payloads, followed by dewhitening and CRC
 Decoder memory is fixed (~26 KB): prefix sums avoid FFT scratch storage and roundoff,
 and only the final 134 bytes need soft-metric history for advert combining. There is
 no unbounded correction search. Other PHYs retain the existing detection behavior.
-The radio worker records up to 8,192 pulse words (32 KB), including a pre-trigger ring,
+The radio worker records up to 10,240 packed 16-bit words (20 KB), including a pre-trigger ring,
 and hands completed snippets to a decoder thread at the same priority as RX (to prevent starvation). Samples are never shared
 while being written. A generation number associates results with the original tuning
 session. Radio loss/retuning abort a capture, but an already handed-off snippet remains
@@ -434,3 +434,28 @@ oversized messages rather than truncate them. The worker snapshots the draft and
 logs sent text if logging is enabled. Existing numbered tests and local queries
 remain separate actions. Host tests decrypt and coherently demodulate short and
 maximum-length composed messages for both protocols, including buffer boundaries.
+
+### MeshCore hop hash width
+
+The saved MC hop bytes setting offers 1/2/3, defaulting to 2. Radio settings v2
+adds the width after channel and route; v1 migration preserves those two fields
+and initializes width to 2. Invalid widths load as 2. TX snapshots width with
+route under the model lock and encodes `(width - 1) << 6` in the empty MeshCore
+path byte for numbered messages, composed messages, and local queries. MT bytes
+are unchanged. Packet builders reject out-of-range widths; tests cover all three
+widths and both routes, plus coherent waveform/CRC checks with the new default.
+
+### Decoder memory recovery
+
+The growing integrated app could skip the old startup-only decoder allocation,
+leaving Decode: low memory permanently even when noticed just after TX. Capture
+storage now uses lossless 16-bit duration/level words with a zero escape plus the
+original 32-bit value for long gaps, reducing the buffer from 32 to 20 KB. The
+pre-trigger ring and ISR stream keep their original format. RX unpacks the buffer
+before feeding the unchanged decoder. TX borrows its actual byte capacity; the
+maximum 44-character LongFast waveform still fits alongside decoder workspace.
+
+Allocation occurs on the RX worker after services start, checks total and maximum
+contiguous free heap, and retries once per second until successful. A 12 KB reserve
+covers the new 4 KB decode thread plus ongoing GUI/storage/radio needs. The GUI
+availability flag is published only after the decoder queue and worker exist.

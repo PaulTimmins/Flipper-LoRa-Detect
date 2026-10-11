@@ -25,14 +25,18 @@ int32_t lora_check_app(void* ctx) {
     File* file = storage_file_alloc(a->storage);
     furi_check(storage_file_open(
         file, EXT_PATH("apps_data/lora_detect/check.bin"), FSAM_READ, FSOM_OPEN_EXISTING));
-    a->capture.count = storage_file_read(file, a->capture.data, sizeof(a->capture.data)) / 4;
+    uint32_t word;
+    while(storage_file_read(file, &word, sizeof(word)) == sizeof(word)) {
+        if(!capture_pack(a->capture.data, &a->capture.count, CAPTURE_WORDS, word)) break;
+    }
     storage_file_close(file);
     a->capture.frequency = lora_profiles[0].frequency;
     a->capture.generation = 123456;
     LoraDetector detector;
     lora_detector_init(&detector, 62500, seed, a);
-    for(unsigned i = 0; i < a->capture.count; ++i) {
-        uint32_t w = a->capture.data[i];
+    for(unsigned i = 0; i < a->capture.count;) {
+        uint32_t w;
+        furi_check(capture_unpack(a->capture.data, a->capture.count, &i, &w));
         lora_detector_feed(&detector, w >> 31, w & 0x7fffffff);
     }
     unsigned seeded = a->model.count;

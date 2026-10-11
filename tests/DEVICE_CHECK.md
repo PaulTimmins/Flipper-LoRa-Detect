@@ -69,3 +69,17 @@ Chat keyboard replacement smoke check: typed `A b!` using the visible Space key
 and 123 punctuation page, selected Done, then explicitly sent once. The device
 log recorded `Sent on MC Public: A b!`. The keyboard freed its view on Done,
 and the app remained running and returned to reception. Build and diff checks passed.
+
+Hop-width menu smoke check: existing radio v1 settings migrated with channel and
+flood route preserved and width defaulting to 2. USB button tests cycled 2 -> 3
+-> 1 -> 2, verified v2 saved bytes, restarted the app, and confirmed the next
+selection was 3. Restored 2 and left reception running. No RF test send was
+needed; host tests cover the generated path byte and waveform CRC.
+
+Decoder-memory regression: the expanded app previously started without a decoder
+(about 29 KB heap free after startup), and the startup-only allocation never
+recovered. With the 20 KB lossless packed capture and deferred allocation, CLI
+thread inspection confirms LoRaDecode exists with 10,168 bytes free. After one
+MC numbered test send, LoRaDecode was actively processing RX again (about 40% CPU)
+with 9,768 bytes free. The full host suite, packed capture boundary tests, and
+maximum-length waveform tests pass with the smaller shared buffer.

@@ -18,14 +18,14 @@ with tempfile.TemporaryDirectory() as tmp:
     cases=[(i,None) for i in range(4)]+[(a,b'Hello mesh!') for a in (0,2)]+[(0,b'M'*34),(2,b'T'*44)]
     for action,message in cases:
         out=(C.c_uint8*64)()
-        n=lib.lora_tx_packet(out,action,17,1791754245,0xf11f1234,True) if message is None else lib.lora_tx_message(out,action==2,message,17,1791754245,0xf11f1234,True)
+        n=lib.lora_tx_packet(out,action,17,1791754245,0xf11f1234,True,2) if message is None else lib.lora_tx_message(out,action==2,message,17,1791754245,0xf11f1234,True,2)
         data=bytes(out[:n]);assert n
         if action==0:
             key=bytes.fromhex('8b3387e9c5cdea6ac9e5edbaa115cd72')
-            assert data[:3]==bytes.fromhex('150011') and data[3:5]==hmac.digest(key,data[5:],'sha256')[:2]
+            assert data[:3]==bytes.fromhex('154011') and data[3:5]==hmac.digest(key,data[5:],'sha256')[:2]
             dec=Cipher(algorithms.AES(key),modes.ECB()).decryptor();plain=dec.update(data[5:])+dec.finalize()
             assert plain[5:].rstrip(b'\0')==(b'Flipper bench: TEST 17' if message is None else b'Flipper: '+message)
-        elif action==1:assert data==bytes.fromhex('2e0080041100000000000000')
+        elif action==1:assert data==bytes.fromhex('2e4080041100000000000000')
         else:
             key=bytes.fromhex('d4f1bb3a20290759f0bcffabcf4e6901')
             nonce=struct.pack('<QI',17,0xf11f1234)+bytes(4)
@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 expected=message if message is not None else b'Flipper TEST 17'
                 assert plain==b'\x08\x01\x12'+bytes([len(expected)])+expected
             else:assert plain==b'\x08\x04\x12\x14\x12\x0cFlipper test\x1a\x04FLIP\x18\x01' and data[12]==0
-        a=(C.c_uint8*32768)();b=(C.c_uint8*28000)();w=Wave(a,b,len(a),len(b))
+        a=(C.c_uint8*20480)();b=(C.c_uint8*26700)();w=Wave(a,b,len(a),len(b))
         assert lib.lora_tx_waveform(C.byref(w),out,n,action>=2)
         packed=bytes(a)+bytes(b)
         levels=np.repeat(np.unpackbits(np.frombuffer(packed,dtype=np.uint8),bitorder='little')[:w.samples],w.quantum).astype(float)
@@ -62,7 +62,29 @@ with tempfile.TemporaryDirectory() as tmp:
         Path(tmp,f'wave{action}.bin').write_bytes(packed[:(w.samples+7)//8])
         print(f'PASS action {action} ({len(message) if message is not None else "test/query"}): independent crypto, real OOK IQ -> exact packet + PHY CRC; {len(levels)} us, {(w.samples+7)//8} bytes')
         small=Wave(a,b,1,0);assert not lib.lora_tx_waveform(C.byref(small),out,n,action>=2)
+    # Width changes only MeshCore routing metadata, not encrypted payload.
+    for action in range(4):
+        for flood in (False,True):
+            reference=None
+            for width in (1,2,3):
+                n=lib.lora_tx_packet(out,action,17,1791754245,0xf11f1234,flood,width)
+                packet=bytes(out[:n]);assert n
+                if action < 2:
+                    assert packet[1]==(width-1)<<6
+                    stable=packet[:1]+packet[2:]
+                else:stable=packet
+                if reference is not None:assert stable==reference
+                reference=stable
+            for width in (0,4,255):
+                assert lib.lora_tx_packet(out,action,17,1791754245,0xf11f1234,flood,width)==0
+    for mt in (False,True):
+        for width in (1,2,3):
+            n=lib.lora_tx_message(out,mt,b'Width test',17,1791754245,0xf11f1234,True,width)
+            assert n and (mt or out[1]==(width-1)<<6)
+        for width in (0,4,255):
+            assert lib.lora_tx_message(out,mt,b'Width test',17,1791754245,0xf11f1234,True,width)==0
+    print('PASS hop widths 1/2/3, local/flood, unchanged MT bytes, invalid widths rejected')
     for mt,limit in [(False,34),(True,44)]:
         for bad in (b'',b'X'*(limit+1)):
-            assert lib.lora_tx_message(out,mt,bad,17,1791754245,0xf11f1234,True)==0
+            assert lib.lora_tx_message(out,mt,bad,17,1791754245,0xf11f1234,True,2)==0
 print('PASS blank/oversized messages and bounded buffer rejection; digital tests are not RF receiver validation')

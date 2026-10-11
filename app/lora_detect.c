@@ -1,7 +1,9 @@
 #include <furi.h>
+#include <furi/core/memmgr_heap.h>
 #include <furi_hal.h>
 #include <gui/gui.h>
 #include "chat_keyboard.h"
+#include "capture_codec.h"
 #include <gui/view_dispatcher.h>
 #include <input/input.h>
 #include <notification/notification_messages.h>
@@ -20,7 +22,7 @@
 
 #define HISTORY       8
 #define STREAM_BYTES  8192
-#define CAPTURE_WORDS 8192
+#define CAPTURE_WORDS 10240
 #define PRE_WORDS     256
 
 typedef struct {
@@ -43,7 +45,7 @@ typedef struct {
     uint8_t decode_mode, setting_row;
     bool tx_menu, tx_pending, tx_busy, tx_cancel, flood, tx_review;
     char tx_preview[LORA_MT_MESSAGE_MAX + 1];
-    uint8_t tx_row;
+    uint8_t tx_row, mc_hop_bytes;
     uint32_t tx_sequence, tx_node, listen_until, query_tag, query_replies, query_tentative;
     char tx_status[40];
 } Model;
@@ -70,7 +72,8 @@ typedef struct {
     int32_t utc_offset;
     uint32_t generation;
     struct {
-        uint32_t pre[PRE_WORDS], data[CAPTURE_WORDS];
+        uint32_t pre[PRE_WORDS];
+        uint16_t data[CAPTURE_WORDS];
         unsigned pre_write, pre_count, count;
         uint64_t time_us, base_us, end_us, until_us;
         uint32_t frequency, bandwidth, generation, deadline;
@@ -95,8 +98,8 @@ typedef struct {
 typedef struct {
     uint8_t logging, sound, decode_mode, mt_crypto, backlight, scanning, mc_crypto;
 } Settings;
-#define SETTINGS_COUNT 9
-static const uint8_t setting_ids[] = {7, 8, 9, 0, 1, 2, 3, 6, 4};
+#define SETTINGS_COUNT 10
+static const uint8_t setting_ids[] = {7, 8, 9, 10, 0, 1, 2, 3, 6, 4};
 static const LoraTxAction tx_actions[] =
     {LoraTxMcText, LoraTxMcQuery, LoraTxMcCompose, LoraTxMtText, LoraTxMtQuery, LoraTxMtCompose};
 static const char* tx_names[] = {
@@ -148,8 +151,15 @@ static void load_settings(App* a) {
     a->model.backlight = saved.backlight;
     a->model.survey = saved.scanning;
     a->model.mc_crypto = saved.mc_crypto;
-    uint8_t radio[2] = {0, 1};
-    saved_struct_load(EXT_PATH("apps_data/lora_detect/radio.bin"), radio, 2, 0xAE, 1);
+    uint8_t radio[3] = {0, 1, 2};
+    if(!saved_struct_load(EXT_PATH("apps_data/lora_detect/radio.bin"), radio, 3, 0xAE, 2)) {
+        /* Preserve channel/route from v1; new width defaults to two bytes. */
+        radio[0] = 0;
+        radio[1] = 1;
+        saved_struct_load(EXT_PATH("apps_data/lora_detect/radio.bin"), radio, 2, 0xAE, 1);
+        radio[2] = 2;
+    }
+    a->model.mc_hop_bytes = radio[2] >= 1 && radio[2] <= 3 ? radio[2] : 2;
     a->model.requested = radio[0] < LORA_PROFILE_COUNT ? radio[0] : 0;
     a->profile = a->model.requested;
     a->model.flood = radio[1] == 1;
@@ -181,14 +191,14 @@ static void save_settings(App* a) {
         a->model.backlight,
         a->model.survey,
         a->model.mc_crypto};
-    uint8_t radio[2] = {a->model.requested, a->model.flood};
+    uint8_t radio[3] = {a->model.requested, a->model.flood, a->model.mc_hop_bytes};
     furi_mutex_release(a->mutex);
     bool ok = storage_simply_mkdir(a->storage, EXT_PATH("apps_data/lora_detect")) &&
               saved_struct_save(
                   EXT_PATH("apps_data/lora_detect/settings.bin"), &saved, sizeof(saved), 0xAD, 4);
     furi_mutex_acquire(a->mutex, FuriWaitForever);
     a->model.settings_error =
-        !ok || !saved_struct_save(EXT_PATH("apps_data/lora_detect/radio.bin"), radio, 2, 0xAE, 1);
+        !ok || !saved_struct_save(EXT_PATH("apps_data/lora_detect/radio.bin"), radio, 3, 0xAE, 2);
     furi_mutex_release(a->mutex);
 }
 
@@ -536,13 +546,13 @@ static uint8_t capture_start(App* a) {
     }
     furi_mutex_release(a->mutex);
     if(busy) return a->capture.capturing ? 6 : 7;
-    a->capture.count = a->capture.pre_count;
+    a->capture.count = 0;
     uint64_t span = 0;
     for(unsigned j = 0; j < a->capture.pre_count; ++j) {
         uint32_t word =
             a->capture
                 .pre[(a->capture.pre_write + PRE_WORDS - a->capture.pre_count + j) % PRE_WORDS];
-        a->capture.data[j] = word;
+        furi_check(capture_pack(a->capture.data, &a->capture.count, CAPTURE_WORDS, word));
         span += word & 0x7fffffffu;
     }
     a->capture.base_us = a->capture.time_us - span;
@@ -577,8 +587,9 @@ static void capture_feed(App* a, uint32_t word) {
     a->capture.pre_write = (a->capture.pre_write + 1) % PRE_WORDS;
     if(a->capture.pre_count < PRE_WORDS) ++a->capture.pre_count;
     if(a->capture.capturing) {
-        a->capture.data[a->capture.count++] = word;
-        if(a->capture.count == CAPTURE_WORDS || a->capture.time_us >= a->capture.until_us)
+        bool stored = capture_pack(a->capture.data, &a->capture.count, CAPTURE_WORDS, word);
+        if(!stored || a->capture.count == CAPTURE_WORDS ||
+           a->capture.time_us >= a->capture.until_us)
             capture_finish(a);
     }
 }
@@ -620,8 +631,9 @@ static int32_t decode_worker(void* context) {
             LoraDetector detector;
             lora_detector_init(&detector, a->capture.bandwidth, replay_detected, a);
             detector.time_us = a->capture.base_us;
-            for(unsigned i = 0; i < a->capture.count; ++i) {
-                if((i & 31) == 0) {
+            unsigned pulses = 0;
+            for(unsigned i = 0; i < a->capture.count;) {
+                if((pulses++ & 31) == 0) {
                     furi_mutex_acquire(a->mutex, FuriWaitForever);
                     stop = a->model.stop || a->model.decode_mode == 0 || a->model.tx_pending ||
                            a->model.tx_busy;
@@ -631,7 +643,8 @@ static int32_t decode_worker(void* context) {
                     if(stop) break;
                     furi_delay_tick(1);
                 }
-                uint32_t word = a->capture.data[i];
+                uint32_t word;
+                if(!capture_unpack(a->capture.data, a->capture.count, &i, &word)) break;
                 lora_payload_feed(a->payload, word >> 31, word & 0x7fffffffu);
                 lora_detector_feed(&detector, word >> 31, word & 0x7fffffffu);
             }
@@ -743,6 +756,7 @@ static void transmit_once(App* a) {
     char message[LORA_MT_MESSAGE_MAX + 1];
     snprintf(message, sizeof(message), "%s", a->draft);
     bool flood = a->model.flood;
+    uint8_t mc_hop_bytes = a->model.mc_hop_bytes;
     uint32_t node = a->model.tx_node;
     a->model.tx_busy = true;
     furi_mutex_release(a->mutex);
@@ -783,9 +797,10 @@ static void transmit_once(App* a) {
         .cancelled = tx_cancelled,
         .context = a};
     uint8_t packet[64];
-    size_t length = composed ?
-                        lora_tx_message(packet, mt, message, sequence, timestamp, node, flood) :
-                        lora_tx_packet(packet, action, sequence, timestamp, node, flood);
+    size_t length =
+        composed ?
+            lora_tx_message(packet, mt, message, sequence, timestamp, node, flood, mc_hop_bytes) :
+            lora_tx_packet(packet, action, sequence, timestamp, node, flood, mc_hop_bytes);
     if(!length || !lora_tx_waveform(&a->tx_wave, packet, length, mt)) {
         outcome = "Waveform failed / cancelled";
         goto done;
@@ -880,6 +895,23 @@ done:
     if(sent) save_settings(a);
 }
 
+/* Called only by RX, before processing captures or TX. Allocate after core
+ * services have started; retry when USB/loader temporary allocations disappear.
+ * Reserve 12 KB for the decoder thread plus GUI, storage and TX allocations. */
+static void try_decoder_alloc(App* a) {
+    if(a->payload || memmgr_get_free_heap() < sizeof(LoraPayload) + 12288 ||
+       memmgr_heap_get_max_free_block() < sizeof(LoraPayload))
+        return;
+    a->payload = malloc(sizeof(LoraPayload));
+    a->decode_jobs = furi_message_queue_alloc(1, sizeof(uint8_t));
+    a->decode_worker = furi_thread_alloc_ex("LoRaDecode", 4096, decode_worker, a);
+    furi_thread_set_priority(a->decode_worker, FuriThreadPriorityNormal);
+    furi_thread_start(a->decode_worker);
+    furi_mutex_acquire(a->mutex, FuriWaitForever);
+    a->model.decode_available = true;
+    furi_mutex_release(a->mutex);
+}
+
 static int32_t worker(void* context) {
     App* a = context;
     subghz_devices_init();
@@ -894,7 +926,7 @@ static int32_t worker(void* context) {
     subghz_devices_reset(a->radio);
     tune(a);
     uint32_t hop = furi_get_tick(), stats = hop, previous_pulses = 0;
-    uint32_t min_free = STREAM_BYTES;
+    uint32_t min_free = STREAM_BYTES, memory_check = 0;
     bool was_survey = false;
     for(;;) {
         furi_mutex_acquire(a->mutex, FuriWaitForever);
@@ -903,6 +935,10 @@ static int32_t worker(void* context) {
         bool tx = a->model.tx_pending;
         furi_mutex_release(a->mutex);
         if(stop) break;
+        if(!a->payload && furi_get_tick() - memory_check >= furi_ms_to_ticks(1000)) {
+            memory_check = furi_get_tick();
+            try_decoder_alloc(a);
+        }
         if(tx) {
             subghz_devices_stop_async_rx(a->radio);
             transmit_once(a);
@@ -1019,7 +1055,8 @@ static void draw(Canvas* canvas, void* context) {
             "MC Public chat",
             "Channel",
             "Mode",
-            "TX route"};
+            "TX route",
+            "MC hop bytes"};
         const char* values[] = {
             m->logging ? "On" : "Off",
             m->sound ? "On" : "Off",
@@ -1030,7 +1067,10 @@ static void draw(Canvas* canvas, void* context) {
             m->mc_crypto ? "On" : "Off",
             lora_profiles[m->requested].name,
             m->survey ? "Scan" : "Watch",
-            m->flood ? "Flood" : "Local"};
+            m->flood ? "Flood" : "Local",
+            m->mc_hop_bytes == 1 ? "1" :
+            m->mc_hop_bytes == 2 ? "2" :
+                                   "3"};
         char row[48];
         unsigned first = m->setting_row < 5 ? 0 : m->setting_row - 4;
         for(unsigned i = first; i < first + 5 && i < SETTINGS_COUNT; ++i) {
@@ -1232,19 +1272,7 @@ int32_t lora_detect_app(void* context) {
     storage_simply_mkdir(a->storage, EXT_PATH("apps_data/lora_detect"));
     load_settings(a);
     a->model.log_error = !log_phone_report(a, NULL, 1000, 0);
-    /* Leave headroom for GUI, storage and radio service allocations. */
-    if(memmgr_get_free_heap() > sizeof(LoraPayload) + 24000) {
-        a->payload = malloc(sizeof(LoraPayload));
-        a->model.decode_available = true;
-    }
     a->model.details = true;
-    if(a->payload) {
-        a->decode_jobs = furi_message_queue_alloc(1, sizeof(uint8_t));
-        a->decode_worker = furi_thread_alloc_ex("LoRaDecode", 4096, decode_worker, a);
-        /* Time-share with RX so continuous input cannot starve decoding. */
-        furi_thread_set_priority(a->decode_worker, FuriThreadPriorityNormal);
-        furi_thread_start(a->decode_worker);
-    }
     a->viewport = view_port_alloc();
     view_port_draw_callback_set(a->viewport, draw, a);
     view_port_input_callback_set(a->viewport, input, a);
@@ -1316,6 +1344,8 @@ int32_t lora_detect_app(void* context) {
                             m->requested = (m->requested + 1) % LORA_PROFILE_COUNT;
                         if(setting_ids[m->setting_row] == 8) m->survey = !m->survey;
                         if(setting_ids[m->setting_row] == 9) m->flood = !m->flood;
+                        if(setting_ids[m->setting_row] == 10)
+                            m->mc_hop_bytes = m->mc_hop_bytes % 3 + 1;
                         save = true;
                     }
                 }
