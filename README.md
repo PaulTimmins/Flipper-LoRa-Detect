@@ -174,3 +174,12 @@ anyone with a Flipper can now read them. Raw captures contain whatever was on th
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Credits
+
+- **Paul Timmins** — project direction, hardware testing, field testing, and maintenance.
+- **Claude (Anthropic)** — initial radio presets, Python analysis and decoding tools,
+  and the original Flipper app design notes.
+- **Codex (OpenAI)** — native Flipper app implementation and subsequent work on
+  background decoding, on-device settings, logging, protocol summaries, performance,
+  and device validation, in collaboration with Paul.
