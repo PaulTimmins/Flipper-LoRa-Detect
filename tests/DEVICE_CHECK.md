@@ -8,13 +8,14 @@ minutes plus worker shutdown). Only run it when the device is available for test
 
 To stage a temporary ufbt project, copy `device_check.c` as `check.c`, and copy
 `app/*.{c,h}` into the same
-directory. Use this manifest:
+directory, along with `app/crypto/` as a subdirectory. Use this manifest:
 
 ```python
 App(appid="lora_check", name="LoRa Check", apptype=FlipperAppType.EXTERNAL,
     entry_point="lora_check_app", requires=["gui"], stack_size=4096,
     sources=["check.c", "payload.c", "detector.c", "report.c", "protocol.c",
-             "mc_public.c", "transmit_packet.c", "transmit_wave.c", "chat_keyboard.c"])
+             "mc_public.c", "transmit_packet.c", "transmit_wave.c", "chat_keyboard.c", "identity.c", "identity_name.c",
+             "crypto/tweetnacl.c"])
 ```
 
 Prepare at most 8192 pulse words from a bounded SF7/BW62500 capture, including
@@ -83,3 +84,15 @@ thread inspection confirms LoRaDecode exists with 10,168 bytes free. After one
 MC numbered test send, LoRaDecode was actively processing RX again (about 40% CPU)
 with 9,768 bytes free. The full host suite, packed capture boundary tests, and
 maximum-length waveform tests pass with the smaller shared buffer.
+
+Identity/name smoke check (2026-10-11): first launch on official 1.4.3 generated
+independent saved keys and preserved the existing MT node number. The Name
+keyboard saved a one-character edit; an app restart preserved both that name and
+the identity file digest. Restored the original generated name through the
+keyboard. No private key bytes were printed or exported. A maximum-name MT local
+NodeInfo query logged `Sent; listening (no ACK)` (sequence 26), then thread
+inspection showed LoRaDecode actively processing again. This checks device TX
+completion and RX recovery, not independent over-the-air receipt of that query.
+The current 16 KB capture plus temporary 2 KB TX extension passes the full host
+suite, including maximum-length waveform recovery and independent Ed25519/X25519
+checks. SD-card migration to another physical device was not hardware-tested.

@@ -16,7 +16,7 @@ This prerelease is built and device-tested with **official firmware 1.4.3, API 8
 
 ## First use
 
-- **Hold OK:** settings. Select Channel and Watch/Scan mode here.
+- **Hold OK:** settings; **Name** edits the sender name. Select Channel and Watch/Scan mode here.
 - **Short OK:** wake the screen.
 - **Right:** send menu. Choose a numbered test, local discovery, or write a message for MeshCore Public or Meshtastic LongFast.
 - **Write message:** type with the visible Space and punctuation keys; Done previews, then OK sends once. Back cancels/returns to editing.
@@ -31,3 +31,12 @@ TX uses fixed US network profiles: MeshCore 910.525 MHz and Meshtastic LongFast 
 Logs live in `SD Card/apps_data/lora_detect/`. The iPhone Flipper app can open `LoRa Logs.txt` through its File Manager; reopen to refresh. Files may contain node names, messages, and other received traffic—review before sharing.
 
 For updates, download the new `.fap`, exit LoRa Detect, and replace the existing file through qFlipper. This prerelease is distributed through GitHub, not yet through the Apps Catalog.
+
+## Identity files
+
+Version 0.8 generates separate per-device MeshCore and Meshtastic keypairs on
+first launch and preserves valid existing MT node IDs. Keys remain stable when
+you rename the device. MeshCore Public uses the saved name; Meshtastic announces
+it through the local NodeInfo query. The shared public-channel keys do not change.
+Signed adverts and private messaging are not implemented yet. `identity.bin`
+contains private keys: keep backups private and never include it in a release.

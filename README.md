@@ -19,7 +19,7 @@ In qFlipper File Manager, copy it to **SD Card → apps → Sub-GHz**, then laun
 The experimental prerelease is tested on **official firmware 1.4.3 / API 87.1**.
 See the [installation guide](docs/INSTALL.md) for setup, updates, compatibility,
 and TX limitations. Public GitHub builds run the synthetic tests; private RF
-captures are not distributed. Tags matching the app version (for example `v0.7`)
+captures are not distributed. Tags matching the app version (for example `v0.8`)
 automatically publish a prerelease after tests and a pinned-SDK build succeed.
 
 ## How reception works
@@ -92,7 +92,7 @@ can demodulate.
    that work cannot delay an edge inside the transmit callback.
 5. **Return to listening.** RX and payload decoding share the radio and memory
    with TX. A send cancels pending decode work, waits for its buffers, borrows the
-   20 KB packed capture buffer plus decoder workspace, then restores reception before
+   16 KB packed capture buffer plus decoder workspace, then restores reception before
    logging the result. This is half-duplex; it cannot receive during a burst.
 
 The implementation is in [transmit_packet.c](app/transmit_packet.c),
@@ -183,7 +183,7 @@ names, plus discovery queries and repeater replies. Meshtastic SF7–SF11 at sup
 refinement. SF12 and low-data-rate-optimization modes (symbol periods over 16 ms)
 remain detection-only. No external radio is required. Experimental test transmission uses the internal CC1101 OOK sideband technique described below.
 
-**Hold OK** opens the saved menu: **Channel**, **Mode** (Watch/Scan), **TX route** (Local/Flood), **MC hop bytes** (1/2/3; default 2), logging, packet sound, **Off / Quick / Thorough**
+**Hold OK** opens the saved menu: **Name**, **Channel**, **Mode** (Watch/Scan), **TX route** (Local/Flood), **MC hop bytes** (1/2/3; default 2), logging, packet sound, **Off / Quick / Thorough**
 decoding, and separate **MT LongFast chat** and **MC Public chat** decoding toggles. Up/Down selects a row; Right
 or OK changes it; Back returns to reception. Changes are saved immediately and persist across launches. Logging and sound change
 immediately; Quick/Thorough and chat decoding choices apply to the next capture. Off cancels
@@ -235,6 +235,41 @@ The app includes its own presets; installing `setting_user` is not required.
 * **Settings → Logging:** toggle and save text/CSV logging; `REC` means enabled, `ERR` means a write failed.
 * **Back:** stop reception and exit.
 
+### Device name and persistent identities
+
+**Hold OK → Name** opens the text keyboard for a shared MeshCore/Meshtastic name
+(1–16 printable ASCII characters, no colon or leading/trailing spaces). Done saves;
+Back cancels. The default is `Flipper XXXXXXXX`, using the first four bytes of
+your generated MeshCore public key. MeshCore Public includes this name with each
+chat. Meshtastic shares it in NodeInfo when you use the local node query; changing
+the setting does not automatically broadcast an announcement.
+
+On first launch, the Flipper hardware RNG generates **independent Ed25519
+(MeshCore) and X25519 (Meshtastic) keypairs**. Keys persist across restarts and
+renames. MeshCore's expanded/clamped private-key representation and reserved
+00/FF public-prefix exclusions follow its identity implementation. Fresh MT node
+numbers use the device MAC's final four bytes and reject reserved IDs, following
+Meshtastic's initial node-number scheme; existing valid `node.bin` IDs are migrated.
+This minimizes collisions but is not a guarantee of global uniqueness or the full
+Meshtastic node-database collision-resolution mechanism.
+
+Public chat still uses the standard **shared channel keys**. MC Public packets
+carry no sender public key; MT's 32-bit node number is separate from its keypair.
+The stored identity keys are ready for future identity features, but this app does
+**not yet send signed MeshCore adverts, advertise MT PKI support, or implement
+private messaging**. A displayed Public sender name is not authenticated.
+
+`identity.bin` contains private keys and is bound to the Flipper hardware UID.
+Copying an initialized SD card to a different Flipper creates new keys and a new
+hardware-derived MT node number there. A corrupt existing identity or failed save
+blocks transmission; no shared fallback identity is used. Keep this file private
+and backed up. `name.bin` stores the editable name separately. Do not share an
+entire `apps_data/lora_detect` directory as an installation bundle.
+
+Protocol references: [MeshCore identity generation](https://github.com/meshcore-dev/MeshCore/blob/main/src/Identity.cpp),
+[Meshtastic node numbers](https://github.com/meshtastic/firmware/blob/master/src/mesh/NodeDB.cpp),
+and [Meshtastic key generation](https://github.com/meshtastic/firmware/blob/master/src/mesh/CryptoEngine.cpp).
+
 ### Test transmission and local discovery
 
 Right opens three actions for each protocol: **test**, **local query**, and **write message**.
@@ -242,8 +277,8 @@ Choose **MC write message** or **MT write message** to open the Flipper keyboard
 The chat keyboard has visible **Space**, **Del**, case, and **123** punctuation keys.
 Select **Done** to preview, then OK to send once; Back returns to editing,
 and Back from the keyboard cancels. Left moves within the keyboard but remains inactive
-on the main screen and menus. MC allows 34 characters (sent as `Flipper: your text`);
-LongFast allows 44. Empty messages are rejected, and successful sends are included
+on the main screen and menus. MC reserves space for your name in `name: your text`: the keyboard limit is
+`41 − name length` (25 with the 16-character default name). LongFast allows 44. Empty messages are rejected, and successful sends are included
 in the phone log when logging is enabled. Each OK sends one fresh packet; there are no automatic retries.
 MC uses US/CA 910.525 MHz, SF7/BW62.5/CR4/5. MT uses US LongFast 906.875 MHz,
 SF11/BW250/CR4/5. Actions select their own fixed network profile, then leave the app
@@ -261,7 +296,8 @@ reserved by [MeshCore](https://github.com/meshcore-dev/MeshCore/blob/main/src/Pa
 and are not offered. Channel, route, and hop width persist across launches.
 
 MC discovery requests full public keys from nearby repeaters, with a unique tag.
-MT sends a NodeInfo announcement named `Flipper test`/`FLIP` with `want_response` and
+MT sends a NodeInfo announcement with your saved name, `!nodeID`, a four-hex-digit
+short name derived from that ID, `want_response`, and
 hop limit zero. This discovers participating nodes, not exclusively repeaters.
 Firmware throttling, node role and channel settings can suppress replies. The saved
 MT node ID stays stable between launches. No node identity is impersonated.
@@ -275,7 +311,9 @@ The receive capture remains bounded, so dense simultaneous responses can be miss
 The transmit worker cancels decoding before borrowing its memory. It precomputes a
 packed waveform, sends it via timer/DMA, then restores RX before logging. MC uses 1 us
 samples; MT uses a centered -125–125 kHz chirp at 2 us sampling to reduce the
-pulse rate enough for the stock DMA refill path. Its conjugate chirp is also emitted. TX completion means the burst ended,
+pulse rate enough for the stock DMA refill path. Its conjugate chirp is also emitted. Longer MT packets temporarily allocate a
+2 KB waveform extension, released before returning to RX; insufficient headroom
+rejects the send rather than disabling decoding. TX completion means the burst ended,
 not that a remote node acknowledged it. Nominal PA is fixed at -10 dBm as in the bench
 experiment; useful sideband power is lower. The scoped US-region exception and
 immediate restoration follow the bench implementation; no region file is changed.
@@ -299,9 +337,9 @@ advert readability, but remain unverified. Wait for further copies if the name i
 The full recovered name (up to 32 bytes) is retained in the log; the small screen shows
 its first 22 characters. Non-ASCII bytes display as `?`.
 
-The decoder uses a fixed ~27 KB working area plus a 20 KB packed snippet buffer, and falls
+The decoder uses a fixed ~27 KB working area plus a 16 KB packed snippet buffer, and falls
 back to detection-only if there is insufficient free heap. After a supported detection,
-it captures up to 2.5 seconds (or 10,240 packed 16-bit words), then decodes on a background thread that time-shares with the radio worker, trying one (Quick) or five (Thorough) small timing offsets. Expect several seconds per packet before initial details appear; the full timing search
+it captures up to 2.5 seconds (or 8,192 packed 16-bit words), then decodes on a background thread that time-shares with the radio worker, trying one (Quick) or five (Thorough) small timing offsets. Expect several seconds per packet before initial details appear; the full timing search
 can take around 1–2 minutes with live reception running and may improve tentative candidates. The radio
 keeps detecting while a snippet is processed; packets arriving during decoding are
 skipped for payload capture, counted on screen, and still logged when recording. They
@@ -450,4 +488,4 @@ This is a regression result, not a measured live-traffic success rate.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The bundled [TweetNaCl reference implementation](app/crypto/README.md) is public domain.

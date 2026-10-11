@@ -22,7 +22,7 @@
 
 #define HISTORY       8
 #define STREAM_BYTES  8192
-#define CAPTURE_WORDS 10240
+#define CAPTURE_WORDS 8192
 #define PRE_WORDS     256
 
 typedef struct {
@@ -46,6 +46,8 @@ typedef struct {
     bool tx_menu, tx_pending, tx_busy, tx_cancel, flood, tx_review;
     char tx_preview[LORA_MT_MESSAGE_MAX + 1];
     uint8_t tx_row, mc_hop_bytes;
+    bool identity_ready, name_invalid;
+    char node_name[LORA_NAME_MAX + 1];
     uint32_t tx_sequence, tx_node, listen_until, query_tag, query_replies, query_tentative;
     char tx_status[40];
 } Model;
@@ -68,6 +70,7 @@ typedef struct {
     ViewDispatcher* keyboard;
     bool keyboard_saved;
     char draft[LORA_MT_MESSAGE_MAX + 1];
+    LoraIdentity identity;
     uint32_t next_tx, tx_cooldown;
     int32_t utc_offset;
     uint32_t generation;
@@ -98,8 +101,8 @@ typedef struct {
 typedef struct {
     uint8_t logging, sound, decode_mode, mt_crypto, backlight, scanning, mc_crypto;
 } Settings;
-#define SETTINGS_COUNT 10
-static const uint8_t setting_ids[] = {7, 8, 9, 10, 0, 1, 2, 3, 6, 4};
+#define SETTINGS_COUNT 11
+static const uint8_t setting_ids[] = {11, 7, 8, 9, 10, 0, 1, 2, 3, 6, 4};
 static const LoraTxAction tx_actions[] =
     {LoraTxMcText, LoraTxMcQuery, LoraTxMcCompose, LoraTxMtText, LoraTxMtQuery, LoraTxMtCompose};
 static const char* tx_names[] = {
@@ -115,6 +118,71 @@ static const NotificationMessage packet_tone = {
     .data.sound = {.frequency = 880, .volume = 0.5f}};
 static const NotificationSequence packet_sound =
     {&packet_tone, &message_delay_100, &message_sound_off, NULL};
+static int32_t generate_identity(void* context) {
+    lora_identity_generate(context);
+    return 0;
+}
+static void load_identity(App* a) {
+    const char* path = EXT_PATH("apps_data/lora_detect/identity.bin");
+    uint8_t uid[12] = {0};
+    size_t size = furi_hal_version_uid_size();
+    if(size > sizeof(uid)) size = sizeof(uid);
+    memcpy(uid, furi_hal_version_uid(), size);
+    bool exists = storage_file_exists(a->storage, path);
+    bool loaded = saved_struct_load(path, &a->identity, sizeof(a->identity), 0xBA, 1);
+    /* A corrupt existing identity must never silently reset keys or packet IDs. */
+    if(exists && !loaded) return;
+    bool copied = loaded && memcmp(uid, a->identity.device_uid, sizeof(uid));
+    if(!loaded || copied) {
+        memset(&a->identity, 0, sizeof(a->identity));
+        memcpy(a->identity.device_uid, uid, sizeof(uid));
+        uint32_t node = 0;
+        if(!copied)
+            saved_struct_load(EXT_PATH("apps_data/lora_detect/node.bin"), &node, 4, 0xB9, 1);
+        if(node < 4 || node == UINT32_MAX || node == 0xf11f0001) {
+            const uint8_t* mac = furi_hal_version_get_ble_mac();
+            node = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) |
+                   mac[5];
+            while(node < 4 || node == UINT32_MAX)
+                node = furi_hal_random_get();
+        }
+        a->identity.mt_node = node;
+        /* Key generation has a larger stack, released before RX/decoder startup. */
+        FuriThread* generator =
+            furi_thread_alloc_ex("LoRaKeys", 8192, generate_identity, &a->identity);
+        furi_thread_start(generator);
+        furi_thread_join(generator);
+        furi_thread_free(generator);
+        if(!saved_struct_save(path, &a->identity, sizeof(a->identity), 0xBA, 1)) return;
+    }
+    if(a->identity.mt_node < 4 || a->identity.mt_node == UINT32_MAX || !a->identity.mc_public[0] ||
+       a->identity.mc_public[0] == 255)
+        return;
+    a->model.tx_node = a->identity.mt_node;
+    a->model.identity_ready = true;
+    char name[LORA_NAME_MAX + 1] = {0};
+    if(!copied &&
+       saved_struct_load(EXT_PATH("apps_data/lora_detect/name.bin"), name, sizeof(name), 0xBB, 1) &&
+       name[LORA_NAME_MAX] == 0 && lora_name_valid(name)) {
+        memcpy(a->model.node_name, name, sizeof(name));
+    } else {
+        snprintf(
+            a->model.node_name,
+            sizeof(a->model.node_name),
+            "Flipper %02X%02X%02X%02X",
+            a->identity.mc_public[0],
+            a->identity.mc_public[1],
+            a->identity.mc_public[2],
+            a->identity.mc_public[3]);
+        if(!saved_struct_save(
+               EXT_PATH("apps_data/lora_detect/name.bin"),
+               a->model.node_name,
+               sizeof(name),
+               0xBB,
+               1))
+            a->model.identity_ready = false;
+    }
+}
 static void load_settings(App* a) {
     Settings saved = {1, 1, 2, 1, 1, 0, 1};
     Settings loaded;
@@ -163,22 +231,14 @@ static void load_settings(App* a) {
     a->model.requested = radio[0] < LORA_PROFILE_COUNT ? radio[0] : 0;
     a->profile = a->model.requested;
     a->model.flood = radio[1] == 1;
-    a->next_tx = 1;
+    a->next_tx = furi_hal_random_get() & 0x7fffffffU;
     saved_struct_load(EXT_PATH("apps_data/lora_tx_bench/sequence.bin"), &a->next_tx, 4, 0xB7, 1);
     saved_struct_load(EXT_PATH("apps_data/lora_detect/sequence.bin"), &a->next_tx, 4, 0xB7, 1);
     if(!a->next_tx) a->next_tx = 1;
     saved_struct_load(
         EXT_PATH("apps_data/lora_tx_bench/utc_offset.bin"), &a->utc_offset, 4, 0xB8, 1);
     if(a->utc_offset < -50400 || a->utc_offset > 50400) a->utc_offset = 0;
-    uint32_t node = 0;
-    saved_struct_load(EXT_PATH("apps_data/lora_detect/node.bin"), &node, 4, 0xB9, 1);
-    if(node < 4 || node == UINT32_MAX) {
-        node = furi_hal_random_get();
-        if(node < 4 || node == UINT32_MAX) node = 0xf11f0001;
-        if(!saved_struct_save(EXT_PATH("apps_data/lora_detect/node.bin"), &node, 4, 0xB9, 1))
-            node = 0;
-    }
-    a->model.tx_node = node;
+    load_identity(a);
     snprintf(a->model.tx_status, sizeof(a->model.tx_status), "Select action, OK sends once");
 }
 static void save_settings(App* a) {
@@ -758,16 +818,24 @@ static void transmit_once(App* a) {
     bool flood = a->model.flood;
     uint8_t mc_hop_bytes = a->model.mc_hop_bytes;
     uint32_t node = a->model.tx_node;
+    bool identity_ready = a->model.identity_ready;
+    char name[LORA_NAME_MAX + 1];
+    memcpy(name, a->model.node_name, sizeof(name));
     a->model.tx_busy = true;
     furi_mutex_release(a->mutex);
     const char* outcome = "Cancelled";
     bool sent = false;
+    uint8_t* tx_extra = NULL;
     uint32_t sequence = a->next_tx,
              timestamp = (uint32_t)((int64_t)furi_hal_rtc_get_timestamp() + a->utc_offset);
     bool mt = action == LoraTxMtText || action == LoraTxMtQuery || action == LoraTxMtCompose;
     bool query = action == LoraTxMcQuery || action == LoraTxMtQuery;
     bool composed = action == LoraTxMcCompose || action == LoraTxMtCompose;
     uint32_t carrier = mt ? 906875000U : 910483750U;
+    if(!identity_ready) {
+        outcome = "Identity save/load failed";
+        goto done;
+    }
     if((int32_t)(furi_get_tick() - a->tx_cooldown) < 0) {
         outcome = "Cooldown; try again shortly";
         goto done;
@@ -799,8 +867,20 @@ static void transmit_once(App* a) {
     uint8_t packet[64];
     size_t length =
         composed ?
-            lora_tx_message(packet, mt, message, sequence, timestamp, node, flood, mc_hop_bytes) :
-            lora_tx_packet(packet, action, sequence, timestamp, node, flood, mc_hop_bytes);
+            lora_tx_message(
+                packet, mt, message, sequence, timestamp, node, flood, mc_hop_bytes, name) :
+            lora_tx_packet(packet, action, sequence, timestamp, node, flood, mc_hop_bytes, name);
+    /* Only longer MT packets need more than the shared 16 KB + decoder area.
+     * This transient extension is freed before RX/logging resumes. */
+    if(mt && length > 48) {
+        if(memmgr_get_free_heap() < 2048 + 3072 || memmgr_heap_get_max_free_block() < 2048) {
+            outcome = "TX memory unavailable";
+            goto done;
+        }
+        tx_extra = malloc(2048);
+        a->tx_wave.extra = tx_extra;
+        a->tx_wave.extra_size = 2048;
+    }
     if(!length || !lora_tx_waveform(&a->tx_wave, packet, length, mt)) {
         outcome = "Waveform failed / cancelled";
         goto done;
@@ -842,6 +922,9 @@ restore:
     /* Clear cached exception before RX restores its normal preset/frequency. */
     furi_hal_subghz_set_frequency(carrier);
 done:
+    free(tx_extra);
+    a->tx_wave.extra = NULL;
+    a->tx_wave.extra_size = 0;
     furi_mutex_acquire(a->mutex, FuriWaitForever);
     a->model.tx_pending = a->model.tx_busy = false;
     a->model.tx_sequence = sequence;
@@ -1056,7 +1139,8 @@ static void draw(Canvas* canvas, void* context) {
             "Channel",
             "Mode",
             "TX route",
-            "MC hop bytes"};
+            "MC hop bytes",
+            "Name"};
         const char* values[] = {
             m->logging ? "On" : "Off",
             m->sound ? "On" : "Off",
@@ -1070,7 +1154,8 @@ static void draw(Canvas* canvas, void* context) {
             m->flood ? "Flood" : "Local",
             m->mc_hop_bytes == 1 ? "1" :
             m->mc_hop_bytes == 2 ? "2" :
-                                   "3"};
+                                   "3",
+            m->identity_ready ? m->node_name : "Identity error"};
         char row[48];
         unsigned first = m->setting_row < 5 ? 0 : m->setting_row - 4;
         for(unsigned i = first; i < first + 5 && i < SETTINGS_COUNT; ++i) {
@@ -1087,7 +1172,9 @@ static void draw(Canvas* canvas, void* context) {
             canvas,
             0,
             64,
-            m->settings_error ? "Save failed - check SD" : "Right/OK change  Back close");
+            m->name_invalid   ? "No colon or edge spaces" :
+            m->settings_error ? "Save failed - check SD" :
+                                "Right/OK change  Back close");
         return;
     }
     const LoraProfile* p = &lora_profiles[m->active];
@@ -1229,14 +1316,10 @@ static bool keyboard_back(void* context) {
     view_dispatcher_stop(a->keyboard);
     return true;
 }
-static void compose_message(App* a, Gui* gui) {
-    bool mt = tx_actions[a->model.tx_row] == LoraTxMtCompose;
-    size_t limit = mt ? LORA_MT_MESSAGE_MAX : LORA_MC_MESSAGE_MAX;
-    a->draft[limit] = 0;
+static void edit_text(App* a, Gui* gui, char* buffer, size_t limit, const char* title) {
     a->keyboard_saved = false;
     view_port_enabled_set(a->viewport, false);
-    View* text =
-        chat_keyboard_alloc(a->draft, limit, mt ? "LongFast" : "MC Public", keyboard_done, a);
+    View* text = chat_keyboard_alloc(buffer, limit, title, keyboard_done, a);
     a->keyboard = view_dispatcher_alloc();
     view_dispatcher_set_event_callback_context(a->keyboard, a);
     view_dispatcher_set_navigation_event_callback(a->keyboard, keyboard_back);
@@ -1248,6 +1331,30 @@ static void compose_message(App* a, Gui* gui) {
     chat_keyboard_free(text);
     view_dispatcher_free(a->keyboard);
     a->keyboard = NULL;
+    view_port_enabled_set(a->viewport, true);
+}
+static void edit_name(App* a, Gui* gui) {
+    char name[LORA_NAME_MAX + 1];
+    furi_mutex_acquire(a->mutex, FuriWaitForever);
+    memcpy(name, a->model.node_name, sizeof(name));
+    furi_mutex_release(a->mutex);
+    edit_text(a, gui, name, LORA_NAME_MAX, "Node name");
+    if(!a->keyboard_saved) return;
+    bool valid = lora_name_valid(name);
+    bool ok =
+        valid &&
+        saved_struct_save(EXT_PATH("apps_data/lora_detect/name.bin"), name, sizeof(name), 0xBB, 1);
+    furi_mutex_acquire(a->mutex, FuriWaitForever);
+    if(ok) memcpy(a->model.node_name, name, sizeof(name));
+    a->model.settings_error = !ok;
+    a->model.name_invalid = !valid;
+    furi_mutex_release(a->mutex);
+}
+static void compose_message(App* a, Gui* gui) {
+    bool mt = tx_actions[a->model.tx_row] == LoraTxMtCompose;
+    size_t limit = mt ? LORA_MT_MESSAGE_MAX : lora_mc_message_limit(a->model.node_name);
+    a->draft[limit] = 0;
+    edit_text(a, gui, a->draft, limit, mt ? "LongFast" : "MC Public");
     furi_mutex_acquire(a->mutex, FuriWaitForever);
     a->model.tx_review = a->keyboard_saved && a->draft[0];
     snprintf(a->model.tx_preview, sizeof(a->model.tx_preview), "%s", a->draft);
@@ -1284,7 +1391,8 @@ int32_t lora_detect_app(void* context) {
     while(running) {
         InputEvent event;
         if(furi_message_queue_get(a->input, &event, furi_ms_to_ticks(100)) == FuriStatusOk) {
-            bool save = false, preview_sound = false, wake_screen = false, compose = false;
+            bool save = false, preview_sound = false, wake_screen = false, compose = false,
+                 rename = false;
             furi_mutex_acquire(a->mutex, FuriWaitForever);
             Model* m = &a->model;
             if(m->tx_menu) {
@@ -1346,7 +1454,10 @@ int32_t lora_detect_app(void* context) {
                         if(setting_ids[m->setting_row] == 9) m->flood = !m->flood;
                         if(setting_ids[m->setting_row] == 10)
                             m->mc_hop_bytes = m->mc_hop_bytes % 3 + 1;
-                        save = true;
+                        if(setting_ids[m->setting_row] == 11)
+                            rename = true;
+                        else
+                            save = true;
                     }
                 }
             } else if(event.type == InputTypeShort || event.type == InputTypeRepeat) {
@@ -1381,6 +1492,7 @@ int32_t lora_detect_app(void* context) {
             }
             furi_mutex_release(a->mutex);
             if(compose) compose_message(a, gui);
+            if(rename) edit_name(a, gui);
             if(wake_screen) notification_message(a->notifications, &sequence_display_backlight_on);
             if(save) save_settings(a);
             if(preview_sound) notification_message(a->notifications, &packet_sound);

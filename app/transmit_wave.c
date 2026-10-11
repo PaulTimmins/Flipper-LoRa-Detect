@@ -11,7 +11,10 @@ typedef struct {
     bool failed;
 } Encoder;
 static uint8_t* byte_at(LoraTxWave* w, size_t n) {
-    return n < w->first_size ? w->first + n : w->second + (n - w->first_size);
+    if(n < w->first_size) return w->first + n;
+    n -= w->first_size;
+    if(n < w->second_size) return w->second + n;
+    return w->extra + (n - w->second_size);
 }
 static void chirp(Encoder* e, unsigned shift, bool down, unsigned length) {
     LoraTxWave* w = e->wave;
@@ -20,7 +23,7 @@ static void chirp(Encoder* e, unsigned shift, bool down, unsigned length) {
         e->failed = true;
         return;
     }
-    if(w->samples + length / w->quantum > (w->first_size + w->second_size) * 8) {
+    if(w->samples + length / w->quantum > (w->first_size + w->second_size + w->extra_size) * 8) {
         e->failed = true;
         return;
     }
@@ -126,7 +129,8 @@ bool lora_tx_waveform(LoraTxWave* w, const uint8_t* packet, size_t length, bool 
     uint32_t run;
     while((run = lora_tx_next(w, &level))) {
         if(run < 2) {
-            if(w->position == w->samples && w->samples < (w->first_size + w->second_size) * 8) {
+            if(w->position == w->samples &&
+               w->samples < (w->first_size + w->second_size + w->extra_size) * 8) {
                 uint8_t* b = byte_at(w, w->samples >> 3);
                 unsigned bit = w->samples & 7;
                 if(!bit) *b = 0;

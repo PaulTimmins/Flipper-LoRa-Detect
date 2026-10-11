@@ -7,7 +7,7 @@ App(
     stack_size=2048,
     fap_category="Sub-GHz",
     fap_icon="lora_icon.png",
-    fap_version="0.7",
+    fap_version="0.8",
     fap_description="LoRa activity detector and experimental mesh test transmitter",
     fap_author="flipper-lora-detect",
 )

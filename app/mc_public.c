@@ -175,8 +175,21 @@ size_t lora_mc_test_packet(uint8_t out[64], uint32_t sequence, uint32_t timestam
     return mc_text_packet(out, text, timestamp, flood);
 }
 size_t lora_mc_message_packet(uint8_t out[64], const char* text, uint32_t timestamp, bool flood) {
-    if(!text || !text[0] || strlen(text) > LORA_MC_MESSAGE_MAX) return 0;
+    if(!text || !text[0] || strlen(text) > 34) return 0;
     char named[44];
     snprintf(named, sizeof(named), "Flipper: %s", text);
+    return mc_text_packet(out, named, timestamp, flood);
+}
+
+size_t lora_mc_named_packet(
+    uint8_t out[64],
+    const char* name,
+    const char* text,
+    uint32_t timestamp,
+    bool flood) {
+    unsigned limit = lora_mc_message_limit(name);
+    if(!limit || !text || !text[0] || strlen(text) > limit) return 0;
+    char named[44];
+    snprintf(named, sizeof(named), "%s: %s", name, text);
     return mc_text_packet(out, named, timestamp, flood);
 }

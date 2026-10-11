@@ -1,4 +1,5 @@
 #pragma once
+#include "identity.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -19,6 +20,8 @@ typedef struct {
     unsigned quantum;
     bool (*cancelled)(void*);
     void* context;
+    uint8_t* extra;
+    size_t extra_size;
 } LoraTxWave;
 size_t lora_mc_test_packet(uint8_t out[64], uint32_t sequence, uint32_t timestamp, bool flood);
 size_t lora_tx_packet(
@@ -28,12 +31,13 @@ size_t lora_tx_packet(
     uint32_t timestamp,
     uint32_t node,
     bool flood,
-    uint8_t mc_hop_bytes);
+    uint8_t mc_hop_bytes,
+    const char* name);
 bool lora_tx_waveform(LoraTxWave*, const uint8_t*, size_t, bool meshtastic);
 /* A zero duration means end of waveform. Callable from the radio DMA refill. */
 uint32_t lora_tx_next(LoraTxWave*, bool* level);
 
-#define LORA_MC_MESSAGE_MAX 34
+#define LORA_MC_MESSAGE_MAX 40
 #define LORA_MT_MESSAGE_MAX 44
 size_t lora_mc_message_packet(uint8_t out[64], const char* text, uint32_t timestamp, bool flood);
 size_t lora_tx_message(
@@ -44,4 +48,12 @@ size_t lora_tx_message(
     uint32_t timestamp,
     uint32_t node,
     bool flood,
-    uint8_t mc_hop_bytes);
+    uint8_t mc_hop_bytes,
+    const char* name);
+
+size_t lora_mc_named_packet(
+    uint8_t out[64],
+    const char* name,
+    const char* text,
+    uint32_t timestamp,
+    bool flood);

@@ -20,3 +20,10 @@ dist/
 /tests/test_protocol
 
 /tests/test_capture
+
+# Device identity backups contain private keys; never publish them.
+identity.bin
+node.bin
+name.bin
+sequence.bin
+/apps_data/

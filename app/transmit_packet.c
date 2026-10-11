@@ -14,8 +14,14 @@ static size_t make_packet(
     uint32_t timestamp,
     uint32_t node,
     bool flood,
-    const char* message) {
-    if(action == LoraTxMcText) return lora_mc_test_packet(out, sequence, timestamp, flood);
+    const char* message,
+    const char* name) {
+    if(!lora_name_valid(name)) return 0;
+    if(action == LoraTxMcText) {
+        char text[24];
+        snprintf(text, sizeof(text), "TEST %lu", (unsigned long)sequence);
+        return lora_mc_named_packet(out, name, text, timestamp, flood);
+    }
     memset(out, 0, 64);
     if(action == LoraTxMcQuery) {
         /* CONTROL, direct empty path; full key response; repeater type mask. */
@@ -52,12 +58,27 @@ static size_t make_packet(
         data[3] = n;
         len = 4 + n;
     } else {
-        /* User protobuf: identifiable test name, short name; unlicensed client. */
-        static const uint8_t user[] = {0x12, 12,  'F', 'l', 'i',  'p', 'p', 'e', 'r', ' ',
-                                       't',  'e', 's', 't', 0x1a, 4,   'F', 'L', 'I', 'P'};
-        data[3] = sizeof(user);
-        memcpy(data + 4, user, sizeof(user));
-        len = 4 + sizeof(user);
+        /* User.id, long_name and a stable four-hex-digit short_name. */
+        char id[10], short_name[5];
+        snprintf(id, sizeof(id), "!%08lx", (unsigned long)node);
+        snprintf(short_name, sizeof(short_name), "%04lx", (unsigned long)(node & 0xffff));
+        size_t n = strlen(name), pos = 4;
+        data[pos++] = 0x0a;
+        data[pos++] = 9;
+        memcpy(data + pos, id, 9);
+        pos += 9;
+        data[pos++] = 0x12;
+        data[pos++] = n;
+        memcpy(data + pos, name, n);
+        pos += n;
+        data[pos++] = 0x1a;
+        data[pos++] = 4;
+        memcpy(data + pos, short_name, 4);
+        pos += 4;
+        data[pos++] = 0x48;
+        data[pos++] = 1; /* User.is_unmessagable: private messaging is not implemented. */
+        data[3] = pos - 4;
+        len = pos;
         data[len++] = 24;
         data[len++] = 1; /* Data.want_response */
     }
@@ -92,9 +113,10 @@ size_t lora_tx_packet(
     uint32_t timestamp,
     uint32_t node,
     bool flood,
-    uint8_t mc_hop_bytes) {
+    uint8_t mc_hop_bytes,
+    const char* name) {
     if(mc_hop_bytes < 1 || mc_hop_bytes > 3) return 0;
-    size_t length = make_packet(out, action, sequence, timestamp, node, flood, NULL);
+    size_t length = make_packet(out, action, sequence, timestamp, node, flood, NULL, name);
     if(length && (action == LoraTxMcText || action == LoraTxMcQuery))
         out[1] = (mc_hop_bytes - 1) << 6; /* Width with zero initial hops. */
     return length;
@@ -107,13 +129,14 @@ size_t lora_tx_message(
     uint32_t timestamp,
     uint32_t node,
     bool flood,
-    uint8_t mc_hop_bytes) {
+    uint8_t mc_hop_bytes,
+    const char* name) {
     if(mc_hop_bytes < 1 || mc_hop_bytes > 3) return 0;
     if(!text || !text[0]) return 0;
     if(!mt) {
-        size_t length = lora_mc_message_packet(out, text, timestamp, flood);
+        size_t length = lora_mc_named_packet(out, name, text, timestamp, flood);
         if(length) out[1] = (mc_hop_bytes - 1) << 6;
         return length;
     }
-    return make_packet(out, LoraTxMtText, sequence, timestamp, node, flood, text);
+    return make_packet(out, LoraTxMtText, sequence, timestamp, node, flood, text, name);
 }

@@ -459,3 +459,21 @@ Allocation occurs on the RX worker after services start, checks total and maximu
 contiguous free heap, and retries once per second until successful. A 12 KB reserve
 covers the new 4 KB decode thread plus ongoing GUI/storage/radio needs. The GUI
 availability flag is published only after the decoder queue and worker exist.
+
+### Persistent identity and names
+
+First launch generates separate Ed25519 and X25519 identities from hardware RNG,
+using TweetNaCl key generation on a temporary 8 KB stack before radio startup.
+MC stores its SHA-512 expanded/clamped secret and public key; MT stores its clamped
+X25519 secret/public pair. The UID-bound, saved-struct identity record preserves
+legacy MT IDs, generates MAC-derived IDs for fresh/copied installations, and fails
+closed for corrupt records or failed writes. Name edits use a separate saved file
+and the existing keyboard; they never regenerate keys. Public chat keys remain
+standard, and identity signing/PKI features are not advertised on air yet.
+
+The larger code image is balanced by a 16 KB packed capture buffer. Longer MT
+packets may borrow a transient 2 KB third waveform region, checked for total and
+contiguous heap availability and freed before RX resumes. Main-app builders
+validate names and account for MC's 43-byte plaintext text budget including the
+name and separator. NodeInfo includes id, editable long name, and stable short
+name. Host tests compare key generation to independent cryptography results.
