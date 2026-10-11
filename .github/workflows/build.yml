@@ -1,0 +1,72 @@
+name: Build and release Flipper app
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install host-test dependencies
+        run: python -m pip install numpy==2.2.6 scipy==1.15.3 cryptography==45.0.7
+      - name: Run host regressions
+        run: make -C tests check
+      - name: Build with official 1.4.3 SDK
+        uses: flipperdevices/flipperzero-ufbt-action@e7cd34914e61ddc056acd8daaab96d8b4d4d9f55
+        with:
+          app-dir: app
+          ufbt-version: '==0.2.6'
+          sdk-url: https://update.flipperzero.one/builds/firmware/1.4.3/flipper-z-f7-sdk-1.4.3.zip
+      - name: Package release files
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+          version = re.search(r'fap_version="([^"]+)"', Path('app/application.fam').read_text())[1]
+          if os.environ['REF_TYPE'] == 'tag':
+              assert os.environ['REF_NAME'] == 'v' + version, 'Tag must match fap_version'
+          notes = Path('docs/releases/v' + version + '.md')
+          assert notes.is_file(), 'Missing release notes'
+          Path('release').mkdir()
+          Path('release/RELEASE_NOTES.md').write_text(notes.read_text())
+          PY
+          cp app/dist/lora_detect.fap docs/INSTALL.md LICENSE release/
+          cd release
+          sha256sum lora_detect.fap > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lora-detect-official-1.4.3
+          path: release/
+          if-no-files-found: error
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lora-detect-official-1.4.3
+          path: release
+      - name: Publish experimental prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease \
+            --title "LoRa Detect $RELEASE_TAG — experimental" \
+            --notes-file release/RELEASE_NOTES.md \
+            release/lora_detect.fap release/SHA256SUMS.txt release/INSTALL.md release/LICENSE

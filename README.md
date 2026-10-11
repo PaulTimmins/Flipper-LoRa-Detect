@@ -10,6 +10,18 @@ LoRa module is involved.
 The goal is a quick answer to "is there a mesh around here worth getting my radio out
 for?". It turns out the Flipper can do a lot more than that.
 
+## Install without compiling
+
+Download **lora_detect.fap** from [Releases](https://github.com/PaulTimmins/Flipper-LoRa-Detect/releases).
+In qFlipper File Manager, copy it to **SD Card → apps → Sub-GHz**, then launch
+**Apps → Sub-GHz → LoRa Detect** on your Flipper. No compiler, Python, or Codex needed.
+
+The experimental prerelease is tested on **official firmware 1.4.3 / API 87.1**.
+See the [installation guide](docs/INSTALL.md) for setup, updates, compatibility,
+and TX limitations. Public GitHub builds run the synthetic tests; private RF
+captures are not distributed. Tags matching the app version (for example `v0.7`)
+automatically publish a prerelease after tests and a pinned-SDK build succeed.
+
 ## How reception works
 
 The CC1101 can't demodulate LoRa's chirp spread spectrum. In **2-FSK async mode**, though,
