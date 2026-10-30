@@ -12,15 +12,15 @@ for?". It turns out the Flipper can do a lot more than that.
 
 ## Install without compiling
 
-Download **lora_detect.fap** from [Releases](https://github.com/PaulTimmins/Flipper-LoRa-Detect/releases).
+Download **lora_detect-1.5.1.fap** for official firmware 1.5.1, or **lora_detect-1.4.3.fap** for official 1.4.3, from [Releases](https://github.com/PaulTimmins/Flipper-LoRa-Detect/releases).
 In qFlipper File Manager, copy it to **SD Card → apps → Sub-GHz**, then launch
 **Apps → Sub-GHz → LoRa Detect** on your Flipper. No compiler, Python, or Codex needed.
 
-The experimental prerelease is tested on **official firmware 1.4.3 / API 87.1**.
+Release builds target **official firmware 1.4.3 and 1.5.1** separately. Flipper external apps embed a firmware API version; a major API change requires a matching rebuild. Future firmware updates may therefore need another release.
 See the [installation guide](docs/INSTALL.md) for setup, updates, compatibility,
 and TX limitations. Public GitHub builds run the synthetic tests; private RF
-captures are not distributed. Tags matching the app version (for example `v0.8`)
-automatically publish a prerelease after tests and a pinned-SDK build succeed.
+captures are not distributed. Tags matching the app version (for example `v0.9`)
+automatically publish a prerelease after tests and the pinned SDK builds succeed.
 
 ## How reception works
 
@@ -183,7 +183,7 @@ names, plus discovery queries and repeater replies. Meshtastic SF7–SF11 at sup
 refinement. SF12 and low-data-rate-optimization modes (symbol periods over 16 ms)
 remain detection-only. No external radio is required. Experimental test transmission uses the internal CC1101 OOK sideband technique described below.
 
-**Hold OK** opens the saved menu: **Name**, **Channel**, **Mode** (Watch/Scan), **TX route** (Local/Flood), **MC hop bytes** (1/2/3; default 2), logging, packet sound, **Off / Quick / Thorough**
+**Hold OK** opens the saved menu: **Name**, **MC hashtag**, **Channel**, **Mode** (Watch/Scan), **TX route** (Local/Flood), **MC hop bytes** (1/2/3; default 2), logging, packet sound, **Off / Quick / Thorough**
 decoding, and separate **MT LongFast chat** and **MC Public chat** decoding toggles. Up/Down selects a row; Right
 or OK changes it; Back returns to reception. Changes are saved immediately and persist across launches. Logging and sound change
 immediately; Quick/Thorough and chat decoding choices apply to the next capture. Off cancels
@@ -205,11 +205,11 @@ The MT LongFast chat option tries only the public LongFast PSK/channel hash, and
 packet passes CRC. It can label node info, routing, traceroute query/reply, neighbor,
 position, telemetry and text traffic, with a short chat preview on screen and full text in the phone log. Private
 channels and PKI messages remain opaque. CRC is not sender authentication. MeshCore
-Public chat uses its standard public key and checks the two-byte channel MAC before displaying text. The MAC does not authenticate the sender name. Both chat options apply to the next capture. MeshCore status/login/telemetry requests are encrypted: only their outer request/reply type is
+Public chat uses its standard public key and checks the two-byte channel MAC before displaying text. The optional **MC hashtag** setting starts empty; enter a name such as `#pikachu-messages` to decode that MeshCore channel alongside Public, or clear the field and select Done to disable it. The app derives the channel key from the hashtag and checks the channel hash and two-byte MAC before displaying text. The MAC does not authenticate the sender name. Hashtag names are guessable, so these channels are public in practice. Chat options apply to the next capture. MeshCore status/login/telemetry requests are encrypted: only their outer request/reply type is
 visible. Unencrypted MeshCore discovery exposes the query tag and a replying node's
 public-key prefix, not its name unless an advert provides one.
 
-Build with `ufbt` using the official 1.4.3 SDK. Host checks require a C compiler
+Build with `ufbt` using the SDK matching your Flipper firmware (official 1.4.3 or 1.5.1). Host checks require a C compiler
 and Python with `numpy`, `scipy`, and `cryptography`:
 
 ```bash

@@ -46,8 +46,9 @@ typedef struct {
     bool tx_menu, tx_pending, tx_busy, tx_cancel, flood, tx_review;
     char tx_preview[LORA_MT_MESSAGE_MAX + 1];
     uint8_t tx_row, mc_hop_bytes;
-    bool identity_ready, name_invalid;
+    bool identity_ready, name_invalid, channel_invalid;
     char node_name[LORA_NAME_MAX + 1];
+    char hashtag[LORA_MC_CHANNEL_MAX + 1];
     uint32_t tx_sequence, tx_node, listen_until, query_tag, query_replies, query_tentative;
     char tx_status[40];
 } Model;
@@ -71,6 +72,7 @@ typedef struct {
     bool keyboard_saved;
     char draft[LORA_MT_MESSAGE_MAX + 1];
     LoraIdentity identity;
+    LoraMcChannel channel;
     uint32_t next_tx, tx_cooldown;
     int32_t utc_offset;
     uint32_t generation;
@@ -82,6 +84,7 @@ typedef struct {
         uint32_t frequency, bandwidth, generation, deadline;
         uint8_t decode_mode;
         bool mt_crypto, mc_crypto;
+        LoraMcChannel channel;
         struct {
             uint64_t time_us;
             int rssi;
@@ -101,8 +104,8 @@ typedef struct {
 typedef struct {
     uint8_t logging, sound, decode_mode, mt_crypto, backlight, scanning, mc_crypto;
 } Settings;
-#define SETTINGS_COUNT 11
-static const uint8_t setting_ids[] = {11, 7, 8, 9, 10, 0, 1, 2, 3, 6, 4};
+#define SETTINGS_COUNT 12
+static const uint8_t setting_ids[] = {11, 12, 7, 8, 9, 10, 0, 1, 2, 3, 6, 4};
 static const LoraTxAction tx_actions[] =
     {LoraTxMcText, LoraTxMcQuery, LoraTxMcCompose, LoraTxMtText, LoraTxMtQuery, LoraTxMtCompose};
 static const char* tx_names[] = {
@@ -219,6 +222,11 @@ static void load_settings(App* a) {
     a->model.backlight = saved.backlight;
     a->model.survey = saved.scanning;
     a->model.mc_crypto = saved.mc_crypto;
+    char hashtag[LORA_MC_CHANNEL_MAX + 1] = {0};
+    if(saved_struct_load(
+           EXT_PATH("apps_data/lora_detect/hashtag.bin"), hashtag, sizeof(hashtag), 0xBC, 1) &&
+       hashtag[LORA_MC_CHANNEL_MAX] == 0 && lora_mc_channel_init(&a->channel, hashtag))
+        memcpy(a->model.hashtag, hashtag, sizeof(hashtag));
     uint8_t radio[3] = {0, 1, 2};
     if(!saved_struct_load(EXT_PATH("apps_data/lora_detect/radio.bin"), radio, 3, 0xAE, 2)) {
         /* Preserve channel/route from v1; new width defaults to two bytes. */
@@ -414,10 +422,19 @@ static bool
             traffic_type(result->packet_type));
         ok = n && storage_file_write(file, entry, n) == n;
         if(ok && result->text[0]) {
-            const char* label = result->public_mac_ok ?
+            const char* label = result->packet_type == 17 ?
+                                    "Hashtag channel MAC matched; sender unverified\nChat: " :
+                                result->public_mac_ok ?
                                     "Public channel MAC matched; sender unverified\nChat: " :
                                     "Chat: ";
             ok = storage_file_write(file, label, strlen(label)) == strlen(label);
+            if(ok && result->packet_type == 17) {
+                char channel_line[48];
+                int length = snprintf(
+                    channel_line, sizeof(channel_line), "Channel: %s\n", a->capture.channel.name);
+                ok = length > 0 && length < (int)sizeof(channel_line) &&
+                     storage_file_write(file, channel_line, length) == (size_t)length;
+            }
             size_t len = strlen(result->text);
             if(ok) ok = storage_file_write(file, result->text, len) == len;
             if(ok) ok = storage_file_write(file, "\n\n", 2) == 2;
@@ -499,8 +516,9 @@ static void payload_decoded(const LoraPayloadResult* raw, void* context) {
     LoraPayloadResult parsed = *raw;
     if(parsed.meshtastic && parsed.payload_complete)
         lora_mt_describe(&parsed, a->capture.mt_crypto);
-    else if(!parsed.meshtastic)
-        lora_mc_public_describe(&parsed, a->capture.mc_crypto);
+    else if(!parsed.meshtastic &&
+            !lora_mc_public_describe(&parsed, a->capture.mc_crypto))
+        lora_mc_channel_describe(&parsed, &a->capture.channel);
     const LoraPayloadResult* result = &parsed;
     unsigned best = 0;
     for(; best < a->capture.best_count; ++best)
@@ -603,6 +621,7 @@ static uint8_t capture_start(App* a) {
         a->capture.decode_mode = a->model.decode_mode;
         a->capture.mt_crypto = a->model.mt_crypto;
         a->capture.mc_crypto = a->model.mc_crypto;
+        a->capture.channel = a->channel;
     }
     furi_mutex_release(a->mutex);
     if(busy) return a->capture.capturing ? 6 : 7;
@@ -1140,7 +1159,8 @@ static void draw(Canvas* canvas, void* context) {
             "Mode",
             "TX route",
             "MC hop bytes",
-            "Name"};
+            "Name",
+            "MC hashtag"};
         const char* values[] = {
             m->logging ? "On" : "Off",
             m->sound ? "On" : "Off",
@@ -1155,7 +1175,8 @@ static void draw(Canvas* canvas, void* context) {
             m->mc_hop_bytes == 1 ? "1" :
             m->mc_hop_bytes == 2 ? "2" :
                                    "3",
-            m->identity_ready ? m->node_name : "Identity error"};
+            m->identity_ready ? m->node_name : "Identity error",
+            m->hashtag[0] ? m->hashtag : "(none)"};
         char row[48];
         unsigned first = m->setting_row < 5 ? 0 : m->setting_row - 4;
         for(unsigned i = first; i < first + 5 && i < SETTINGS_COUNT; ++i) {
@@ -1172,6 +1193,7 @@ static void draw(Canvas* canvas, void* context) {
             canvas,
             0,
             64,
+            m->channel_invalid ? "Use #name, no spaces" :
             m->name_invalid   ? "No colon or edge spaces" :
             m->settings_error ? "Save failed - check SD" :
                                 "Right/OK change  Back close");
@@ -1238,7 +1260,7 @@ static void draw(Canvas* canvas, void* context) {
                 snprintf(text, sizeof(text), "%ddBm %uB CRC OK", h->rssi, h->payload_length);
             else
                 snprintf(text, sizeof(text), "%ddBm %uB tentative", h->rssi, h->payload_length);
-            if(h->packet_type == 16 || h->packet_type == 33) {
+            if(h->packet_type == 16 || h->packet_type == 17 || h->packet_type == 33) {
                 /* Show the preview in place of the generic confidence line. */
                 snprintf(text, sizeof(text), "%.22s", h->detail);
             }
@@ -1316,10 +1338,11 @@ static bool keyboard_back(void* context) {
     view_dispatcher_stop(a->keyboard);
     return true;
 }
-static void edit_text(App* a, Gui* gui, char* buffer, size_t limit, const char* title) {
+static void
+    edit_text(App* a, Gui* gui, char* buffer, size_t limit, const char* title, bool allow_empty) {
     a->keyboard_saved = false;
     view_port_enabled_set(a->viewport, false);
-    View* text = chat_keyboard_alloc(buffer, limit, title, keyboard_done, a);
+    View* text = chat_keyboard_alloc(buffer, limit, title, allow_empty, keyboard_done, a);
     a->keyboard = view_dispatcher_alloc();
     view_dispatcher_set_event_callback_context(a->keyboard, a);
     view_dispatcher_set_navigation_event_callback(a->keyboard, keyboard_back);
@@ -1338,7 +1361,7 @@ static void edit_name(App* a, Gui* gui) {
     furi_mutex_acquire(a->mutex, FuriWaitForever);
     memcpy(name, a->model.node_name, sizeof(name));
     furi_mutex_release(a->mutex);
-    edit_text(a, gui, name, LORA_NAME_MAX, "Node name");
+    edit_text(a, gui, name, LORA_NAME_MAX, "Node name", false);
     if(!a->keyboard_saved) return;
     bool valid = lora_name_valid(name);
     bool ok =
@@ -1348,13 +1371,39 @@ static void edit_name(App* a, Gui* gui) {
     if(ok) memcpy(a->model.node_name, name, sizeof(name));
     a->model.settings_error = !ok;
     a->model.name_invalid = !valid;
+    a->model.channel_invalid = false;
+    furi_mutex_release(a->mutex);
+}
+static void edit_channel(App* a, Gui* gui) {
+    char name[LORA_MC_CHANNEL_MAX + 1];
+    furi_mutex_acquire(a->mutex, FuriWaitForever);
+    memcpy(name, a->model.hashtag, sizeof(name));
+    furi_mutex_release(a->mutex);
+    edit_text(a, gui, name, LORA_MC_CHANNEL_MAX, "MC hashtag", true);
+    if(!a->keyboard_saved) return;
+    LoraMcChannel channel = {0};
+    bool valid = !name[0] || lora_mc_channel_init(&channel, name);
+    bool ok = valid && saved_struct_save(
+                           EXT_PATH("apps_data/lora_detect/hashtag.bin"),
+                           name,
+                           sizeof(name),
+                           0xBC,
+                           1);
+    furi_mutex_acquire(a->mutex, FuriWaitForever);
+    if(ok) {
+        a->channel = channel;
+        memcpy(a->model.hashtag, name, sizeof(name));
+    }
+    a->model.settings_error = !ok;
+    a->model.channel_invalid = !valid;
+    a->model.name_invalid = false;
     furi_mutex_release(a->mutex);
 }
 static void compose_message(App* a, Gui* gui) {
     bool mt = tx_actions[a->model.tx_row] == LoraTxMtCompose;
     size_t limit = mt ? LORA_MT_MESSAGE_MAX : lora_mc_message_limit(a->model.node_name);
     a->draft[limit] = 0;
-    edit_text(a, gui, a->draft, limit, mt ? "LongFast" : "MC Public");
+    edit_text(a, gui, a->draft, limit, mt ? "LongFast" : "MC Public", false);
     furi_mutex_acquire(a->mutex, FuriWaitForever);
     a->model.tx_review = a->keyboard_saved && a->draft[0];
     snprintf(a->model.tx_preview, sizeof(a->model.tx_preview), "%s", a->draft);
@@ -1392,7 +1441,7 @@ int32_t lora_detect_app(void* context) {
         InputEvent event;
         if(furi_message_queue_get(a->input, &event, furi_ms_to_ticks(100)) == FuriStatusOk) {
             bool save = false, preview_sound = false, wake_screen = false, compose = false,
-                 rename = false;
+                 rename = false, edit_hashtag = false;
             furi_mutex_acquire(a->mutex, FuriWaitForever);
             Model* m = &a->model;
             if(m->tx_menu) {
@@ -1456,6 +1505,8 @@ int32_t lora_detect_app(void* context) {
                             m->mc_hop_bytes = m->mc_hop_bytes % 3 + 1;
                         if(setting_ids[m->setting_row] == 11)
                             rename = true;
+                        else if(setting_ids[m->setting_row] == 12)
+                            edit_hashtag = true;
                         else
                             save = true;
                     }
@@ -1493,6 +1544,7 @@ int32_t lora_detect_app(void* context) {
             furi_mutex_release(a->mutex);
             if(compose) compose_message(a, gui);
             if(rename) edit_name(a, gui);
+            if(edit_hashtag) edit_channel(a, gui);
             if(wake_screen) notification_message(a->notifications, &sequence_display_backlight_on);
             if(save) save_settings(a);
             if(preview_sound) notification_message(a->notifications, &packet_sound);

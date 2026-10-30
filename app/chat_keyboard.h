@@ -5,6 +5,7 @@ View* chat_keyboard_alloc(
     char* text,
     size_t limit,
     const char* title,
+    bool allow_empty,
     void (*done)(void*),
     void* context);
 void chat_keyboard_free(View* view);

@@ -379,6 +379,7 @@ bool lora_mt_describe(LoraPayloadResult* r, bool decrypt_default) {
 }
 const char* lora_traffic_type(int type) {
     if(type == 16) return "MC Public chat";
+    if(type == 17) return "MC hashtag chat";
     static const char* mc[] = {
         "Encrypted request",
         "Encrypted reply",

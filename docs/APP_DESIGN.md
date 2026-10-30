@@ -477,3 +477,9 @@ contiguous heap availability and freed before RX resumes. Main-app builders
 validate names and account for MC's 43-byte plaintext text budget including the
 name and separator. NodeInfo includes id, editable long name, and stable short
 name. Host tests compare key generation to independent cryptography results.
+
+### Optional MeshCore hashtag channel (v0.9)
+
+The setting starts empty and is saved separately in `hashtag.bin` (versioned saved struct). A leading `#` and 2–32 printable ASCII bytes are required; blank disables it. The 16-byte group key is `SHA256(UTF8(hashtag))[:16]`; the routing hash is `SHA256(key)[0]`. The decoder checks the hash and two-byte HMAC over ciphertext before AES-128 ECB decryption. Public remains independent and enabled by default. The decoded type and phone log identify hashtag traffic, with the sender still unverified. `#pikachu-messages` derives key `bb769dc431cacf66f6a5fe1243900c0d` and hash `0x51`; an independently encrypted packet fixture checks the parser.
+
+Release artifacts are built separately against official 1.4.3 and 1.5.1 SDKs. FAP API major-version checks prevent a single binary from reliably spanning breaking firmware API changes. The release uses firmware-specific filenames and checksums.

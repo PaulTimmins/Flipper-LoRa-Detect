@@ -1,5 +1,13 @@
 #pragma once
 #include "payload.h"
+#define LORA_MC_CHANNEL_MAX 32
+typedef struct {
+    char name[LORA_MC_CHANNEL_MAX + 1];
+    uint8_t key[16];
+    uint8_t hash;
+} LoraMcChannel;
+bool lora_mc_channel_init(LoraMcChannel*, const char* hashtag);
+bool lora_mc_channel_describe(LoraPayloadResult*, const LoraMcChannel*);
 /* Only public/default channel PSK; never guesses private keys. */
 bool lora_mt_describe(LoraPayloadResult*, bool decrypt_default);
 void lora_aes128_ctr(uint8_t* data, size_t size, const uint8_t key[16], uint8_t nonce[16]);

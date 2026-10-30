@@ -9,6 +9,7 @@ typedef struct {
     const char* title;
     unsigned row, column;
     bool upper, symbols;
+    bool allow_empty;
     void (*done)(void*);
     void* context;
 } ChatKeys;
@@ -99,7 +100,7 @@ static bool input(InputEvent* e, void* context) {
                         ch = ' ';
                     else if(k->column == 3) {
                         if(n) k->text[n - 1] = 0;
-                    } else if(n) {
+                    } else if(n || k->allow_empty) {
                         finish = true;
                         done = k->done;
                         callback_context = k->context;
@@ -119,6 +120,7 @@ View* chat_keyboard_alloc(
     char* text,
     size_t limit,
     const char* title,
+    bool allow_empty,
     void (*done)(void*),
     void* context) {
     View* v = view_alloc();
@@ -133,6 +135,7 @@ View* chat_keyboard_alloc(
             k->row = 0;
             k->column = 0;
             k->symbols = false;
+            k->allow_empty = allow_empty;
             k->text = text;
             k->limit = limit;
             k->title = title;

@@ -25,5 +25,6 @@ dist/
 identity.bin
 node.bin
 name.bin
+hashtag.bin
 sequence.bin
 /apps_data/

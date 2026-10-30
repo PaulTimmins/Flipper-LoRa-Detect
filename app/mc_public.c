@@ -77,34 +77,49 @@ static void sha256(const uint8_t* data, size_t len, uint8_t out[32]) {
     for(unsigned i = 0; i < 32; ++i)
         out[i] = h[i / 4] >> (24 - 8 * (i % 4));
 }
-bool lora_mc_public_describe(LoraPayloadResult* r, bool enabled) {
+bool lora_mc_channel_init(LoraMcChannel* channel, const char* hashtag) {
+    if(!channel || !hashtag || hashtag[0] != '#') return false;
+    size_t len = strlen(hashtag);
+    if(len < 2 || len > LORA_MC_CHANNEL_MAX || hashtag[len - 1] == ' ') return false;
+    for(size_t i = 1; i < len; ++i)
+        if((unsigned char)hashtag[i] < 33 || (unsigned char)hashtag[i] > 126) return false;
+    uint8_t digest[32];
+    sha256((const uint8_t*)hashtag, len, digest);
+    memcpy(channel->key, digest, 16);
+    sha256(channel->key, 16, digest);
+    channel->hash = digest[0];
+    memcpy(channel->name, hashtag, len + 1);
+    return true;
+}
+static bool mc_channel_describe(
+    LoraPayloadResult* r, const uint8_t key[16], uint8_t hash, bool custom) {
     r->public_mac_ok = false;
     r->text[0] = 0;
-    if(!enabled || r->meshtastic || !r->payload_complete || r->length < 21 ||
+    if(r->meshtastic || !r->payload_complete || r->length < 21 ||
        (r->data[0] >> 6) != 0 || ((r->data[0] >> 2) & 15) != 5)
         return false;
     unsigned route = r->data[0] & 3;
     unsigned offset = (route == 0 || route == 3) ? 5 : 1;
     unsigned path = r->data[offset++];
     offset += (path & 63) * ((path >> 6) + 1);
-    if(offset + 3 >= r->length || r->data[offset] != 0x11) return false;
+    if(offset + 3 >= r->length || r->data[offset] != hash) return false;
     unsigned len = r->length - offset - 3;
     if(!len || len % 16 || len > 240) return false;
     const uint8_t* cipher = r->data + offset + 3;
     uint8_t buffer[304], digest[32];
     memset(buffer, 0x36, 64);
     for(unsigned i = 0; i < 16; ++i)
-        buffer[i] ^= public_key[i];
+        buffer[i] ^= key[i];
     memcpy(buffer + 64, cipher, len);
     sha256(buffer, 64 + len, digest);
     memset(buffer, 0x5c, 64);
     for(unsigned i = 0; i < 16; ++i)
-        buffer[i] ^= public_key[i];
+        buffer[i] ^= key[i];
     memcpy(buffer + 64, digest, 32);
     sha256(buffer, 96, digest);
     if((digest[0] ^ r->data[offset + 1]) | (digest[1] ^ r->data[offset + 2])) return false;
     memcpy(buffer, cipher, len);
-    lora_aes128_ecb_decrypt(buffer, len, public_key);
+    lora_aes128_ecb_decrypt(buffer, len, key);
     if((buffer[4] >> 2) != 0) return false;
     unsigned text_len = 0;
     while(text_len < len - 5 && buffer[5 + text_len])
@@ -130,8 +145,15 @@ bool lora_mc_public_describe(LoraPayloadResult* r, bool enabled) {
     }
     r->detail[sizeof(r->detail) - 1] = 0;
     r->public_mac_ok = true;
-    r->packet_type = 16;
+    r->packet_type = custom ? 17 : 16;
     return true;
+}
+bool lora_mc_public_describe(LoraPayloadResult* r, bool enabled) {
+    return enabled && mc_channel_describe(r, public_key, 0x11, false);
+}
+bool lora_mc_channel_describe(LoraPayloadResult* r, const LoraMcChannel* channel) {
+    return channel && channel->name[0] &&
+           mc_channel_describe(r, channel->key, channel->hash, true);
 }
 
 static size_t mc_text_packet(uint8_t out[64], const char* text, uint32_t timestamp, bool flood) {

@@ -142,6 +142,37 @@ int main(void) {
     r.status = LoraPayloadDamaged;
     memcpy(r.data, mc_short, sizeof(mc_short));
     assert(!lora_mc_public_describe(&r, false) && !r.text[0]);
+    LoraMcChannel channel = {0};
+    assert(lora_mc_channel_init(&channel, "#pikachu-messages"));
+    static const uint8_t hashtag_key[16] = {
+        0xbb, 0x76, 0x9d, 0xc4, 0x31, 0xca, 0xcf, 0x66,
+        0xf6, 0xa5, 0xfe, 0x12, 0x43, 0x90, 0x0c, 0x0d};
+    assert(channel.hash == 0x51 && !memcmp(channel.key, hashtag_key, 16));
+    assert(!lora_mc_channel_init(&channel, "pikachu-messages"));
+    assert(!lora_mc_channel_init(&channel, "#bad name"));
+    assert(!lora_mc_channel_init(&channel, "#"));
+    static const uint8_t hashtag_packet[] = {
+        0x15, 0x00, 0x51, 0xfa, 0x4b, 0x0d, 0x26, 0xb9, 0x7e, 0x9f, 0x7f,
+        0xe9, 0x3d, 0x49, 0x83, 0xfb, 0x9b, 0xb2, 0x7b, 0xbf, 0x5a};
+    memset(&r, 0, sizeof(r));
+    r.length = r.decoded_bytes = sizeof(hashtag_packet);
+    r.payload_complete = true;
+    r.status = LoraPayloadCrcOk;
+    memcpy(r.data, hashtag_packet, sizeof(hashtag_packet));
+    assert(lora_mc_channel_describe(&r, &channel));
+    assert(r.packet_type == 17 && r.public_mac_ok);
+    assert(!strcmp(r.text, "Ash: Hello") && !strcmp(r.name, "Ash"));
+    assert(!strcmp(lora_traffic_type(r.packet_type), "MC hashtag chat"));
+    r.data[3] ^= 1;
+    assert(!lora_mc_channel_describe(&r, &channel) && !r.text[0] && !r.public_mac_ok);
+    memcpy(r.data, hashtag_packet, sizeof(hashtag_packet));
+    r.data[2] = 0x11;
+    assert(!lora_mc_channel_describe(&r, &channel));
+    memset(&r, 0, sizeof(r));
+    r.length = r.decoded_bytes = sizeof(mc_short);
+    r.payload_complete = true;
+    r.status = LoraPayloadDamaged;
+    memcpy(r.data, mc_short, sizeof(mc_short));
     assert(lora_mc_public_describe(&r, true) && r.packet_type == 16 && r.public_mac_ok);
     assert(!strcmp(r.text, "Alice: Hello Public") && !strcmp(r.name, "Alice"));
     assert(r.status == LoraPayloadDamaged && !memcmp(r.data, mc_short, sizeof(mc_short)));
